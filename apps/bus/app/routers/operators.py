@@ -330,11 +330,15 @@ def report_summary(operator_id: str, since_days: int = 7, user: User = Depends(g
     revenue = sum(int(b.total_price_cents) for b in rows if b.status == "confirmed")
     # crude occupancy: average of (seats_count / seats_total) over confirmed bookings
     occ_vals = []
-    for b in rows:
-        if b.status == "confirmed":
-            t = db.get(Trip, b.trip_id)
-            if t and t.seats_total > 0:
-                occ_vals.append(100.0 * float(b.seats_count) / float(t.seats_total))
+    # Prefetch trips once for occupancy calc
+    trip_ids = {b.trip_id for b in rows if b.status == "confirmed"}
+    if trip_ids:
+        trips = {t.id: t for t in db.query(Trip).filter(Trip.id.in_(trip_ids)).all()}
+        for b in rows:
+            if b.status == "confirmed":
+                t = trips.get(b.trip_id)
+                if t and t.seats_total > 0:
+                    occ_vals.append(100.0 * float(b.seats_count) / float(t.seats_total))
     avg_occ = round(sum(occ_vals) / len(occ_vals), 2) if occ_vals else 0.0
     return ReportSummaryOut(
         from_utc=fr,
