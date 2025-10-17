@@ -1,0 +1,132 @@
+{
+  "title": "SuperApp Overview",
+  "uid": "superapp-overview",
+  "schemaVersion": 36,
+  "version": 1,
+  "timezone": "",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Error Rate (5m)",
+      "gridPos": {"x": 0, "y": 0, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "100 * sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))", "refId": "A"}
+      ],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto"}
+    },
+    {
+      "type": "bargauge",
+      "title": "Req/s by Service (5m)",
+      "gridPos": {"x": 8, "y": 0, "w": 16, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(http_requests_total[5m])) by (job)", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP p90 Latency by Service (5m)",
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 6},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP p99 Latency by Service (5m)",
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 6},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Payments: QR Pays (rate)",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 6},
+      "targets": [
+        {"expr": "sum(rate(payments_qr_total[5m]))", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Payments: Transfers by kind (rate)",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 6},
+      "targets": [
+        {"expr": "sum(rate(payments_transfers_total[5m])) by (kind)", "refId": "A"}
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Merchant Fees (last 1h, cents)",
+      "gridPos": {"x": 0, "y": 10, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "sum(increase(payments_merchant_fees_cents[1h]))", "refId": "A"}
+      ],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "stat",
+      "title": "Merchant Gross Inflow (1h, cents)",
+      "gridPos": {"x": 8, "y": 10, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "sum(increase(payments_merchant_gross_cents[1h]))", "refId": "A"}
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Commerce Orders by status (rate)",
+      "gridPos": {"x": 16, "y": 10, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(commerce_orders_total[5m])) by (status)", "refId": "A"}
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Doctors Appointments by status (rate)",
+      "gridPos": {"x": 0, "y": 14, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(doctors_appointments_total[5m])) by (status)", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP 5xx by Service",
+      "gridPos": {"x": 8, "y": 14, "w": 16, "h": 6},
+      "targets": [
+        {"expr": "sum(rate(http_requests_total{status=~\\\"5..\\\"}[5m])) by (job)", "refId": "A"}
+      ]
+    }
+    ,
+    {
+      "type": "timeseries",
+      "title": "Payments p95/p99 latency (s)",
+      "gridPos": {"x": 0, "y": 26, "w": 24, "h": 6},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"payments\\\"}[5m])))", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"payments\\\"}[5m])))", "refId": "B"}
+      ]
+    }
+    ,
+    {
+      "type": "stat",
+      "title": "Taxi Matching Success % (5m)",
+      "gridPos": {"x": 0, "y": 32, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "100 * (sum(rate(taxi_matching_attempts_total{result=\\\"assigned\\\"}[5m])) / clamp_min(sum(rate(taxi_matching_attempts_total[5m])), 1e-9))", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Taxi Timeout Reassigns (rate)",
+      "gridPos": {"x": 8, "y": 32, "w": 16, "h": 6},
+      "targets": [
+        {"expr": "sum(rate(taxi_timeouts_reassigned_total[5m]))", "refId": "A"}
+      ]
+    }
+  ]
+}
