@@ -1,0 +1,29 @@
+{
+  "title": "Commerce Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Orders/min",
+      "gridPos": {"x": 0, "y": 0, "w": 8, "h": 6},
+      "targets": [{"expr": "sum(rate(commerce_orders_total[5m]))"}]
+    },
+    {
+      "type": "graph",
+      "title": "Orders by Status",
+      "gridPos": {"x": 0, "y": 6, "w": 24, "h": 8},
+      "targets": [{"expr": "sum by (status) (rate(commerce_orders_total[5m]))"}]
+    }
+    ,
+    {
+      "type": "timeseries",
+      "title": "HTTP p90/p99 latency (s)",
+      "gridPos": {"x": 0, "y": 14, "w": 24, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.90, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"commerce\\\"}[5m])))", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"commerce\\\"}[5m])))", "refId": "B"}
+      ]
+    }
+  ]
+}

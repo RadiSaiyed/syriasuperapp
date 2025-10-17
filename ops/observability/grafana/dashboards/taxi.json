@@ -1,0 +1,172 @@
+{
+  "title": "Taxi Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Matching Success %",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "100 * (sum(rate(taxi_matching_attempts_total{result=\"assigned\"}[5m])) / clamp_min(sum(rate(taxi_matching_attempts_total[5m])), 1e-9))"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Matching Attempts/min",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 16,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(taxi_matching_attempts_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Reassign Events/min",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason, result) (rate(taxi_reassign_events_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Timeout Reassigns/min",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(taxi_timeouts_reassigned_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Status Transitions/min",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "expr": "sum by (to) (rate(taxi_ride_status_transitions_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Geocoder Calls/min",
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (type, result) (rate(taxi_maps_geocoder_calls_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Cancel Rate/min",
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"taxi\",path=~\"/rides/.*/cancel_by_rider\"}[5m]))",
+          "legendFormat": "rider"
+        },
+        {
+          "expr": "sum(rate(http_requests_total{job=\"taxi\",path=~\"/rides/.*/cancel_by_driver\"}[5m]))",
+          "legendFormat": "driver"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "ETA Abs Error p50 (min)",
+      "gridPos": {
+        "x": 12,
+        "y": 34,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(taxi_eta_pickup_abs_error_minutes_bucket[5m])))"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "ETA Abs Error p90 (min)",
+      "gridPos": {
+        "x": 18,
+        "y": 34,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(taxi_eta_pickup_abs_error_minutes_bucket[5m])))"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "HTTP 5xx/min (Taxi)",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"taxi\",status=~\"5..\"}[5m]))"
+        }
+      ]
+    }
+    ,
+    {
+      "type": "timeseries",
+      "title": "HTTP p90/p99 latency (s)",
+      "gridPos": {"x": 0, "y": 50, "w": 24, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.90, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"taxi\\\"}[5m])))", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"taxi\\\"}[5m])))", "refId": "B"}
+      ]
+    }
+  ]
+}
