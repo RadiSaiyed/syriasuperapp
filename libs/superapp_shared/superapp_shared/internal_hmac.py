@@ -59,7 +59,9 @@ def verify_internal_hmac_with_replay(
     if ttl_secs is None or int(ttl_secs) <= 0:
         return True
     # Replay protection (optional, if Redis available)
-    r = _redis_client(redis_url or os.getenv("REDIS_URL"))
+    # Prefer explicit arg, then REDIS_TEST_URL (used by health/tests), then REDIS_URL
+    redis_env_url = redis_url or os.getenv("REDIS_TEST_URL") or os.getenv("REDIS_URL")
+    r = _redis_client(redis_env_url)
     if r is None:
         return True
     key = f"hmac_replay:{sign}"
