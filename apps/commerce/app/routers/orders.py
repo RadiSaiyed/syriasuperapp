@@ -6,6 +6,7 @@ import httpx
 from ..auth import get_current_user, get_db
 from ..config import settings
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from ..models import User, Cart, CartItem, Product, Order, OrderItem, Shop, PromoCode, PromoRedemption
 from ..schemas import OrderOut, OrdersListOut, OrderItemOut, CheckoutIn
 from prometheus_client import Counter
@@ -182,5 +183,12 @@ def mark_shipped(order_id: str, user: User = Depends(get_current_user), db: Sess
 
 @router.get("", response_model=OrdersListOut)
 def list_orders(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    rows = db.query(Order).filter(Order.user_id == user.id).order_by(Order.created_at.desc()).limit(100).all()
+    rows = (
+        db.query(Order)
+        .options(selectinload(Order.items))
+        .filter(Order.user_id == user.id)
+        .order_by(Order.created_at.desc())
+        .limit(100)
+        .all()
+    )
     return OrdersListOut(orders=[_to_order_out(db, o) for o in rows])
