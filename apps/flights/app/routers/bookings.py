@@ -132,8 +132,39 @@ def create_booking(payload: CreateBookingIn, request: Request, user: User = Depe
 
 @router.get("", response_model=BookingsListOut)
 def list_bookings(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    rows = db.query(Booking).filter(Booking.user_id == user.id).order_by(Booking.created_at.desc()).limit(100).all()
-    return BookingsListOut(bookings=[_to_booking_out(db, b) for b in rows])
+    rows = (
+        db.query(Booking)
+        .filter(Booking.user_id == user.id)
+        .order_by(Booking.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    if not rows:
+        return BookingsListOut(bookings=[])
+    # Avoid N+1: prefetch flights and airlines
+    flight_ids = {b.flight_id for b in rows}
+    flights = {f.id: f for f in db.query(Flight).filter(Flight.id.in_(flight_ids)).all()}
+    airline_ids = {f.airline_id for f in flights.values() if f}
+    airlines = {a.id: a for a in db.query(Airline).filter(Airline.id.in_(airline_ids)).all()} if airline_ids else {}
+    out = []
+    for b in rows:
+        f = flights.get(b.flight_id)
+        al = airlines.get(f.airline_id) if f else None
+        out.append(
+            BookingOut(
+                id=str(b.id),
+                status=b.status,
+                flight_id=str(b.flight_id),
+                airline_name=al.name if al else "",
+                origin=f.origin if f else "",
+                destination=f.destination if f else "",
+                depart_at=f.depart_at if f else datetime.utcnow(),
+                seats_count=b.seats_count,
+                total_price_cents=b.total_price_cents,
+                payment_request_id=b.payment_request_id,
+            )
+        )
+    return BookingsListOut(bookings=out)
 
 
 @router.post("/{booking_id}/cancel")

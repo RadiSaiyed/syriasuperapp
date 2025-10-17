@@ -142,8 +142,46 @@ def create_booking(payload: CreateBookingIn, request: Request, user: User = Depe
 
 @router.get("", response_model=BookingsListOut)
 def list_bookings(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    rows = db.query(Booking).filter(Booking.user_id == user.id).order_by(Booking.created_at.desc()).limit(100).all()
-    return BookingsListOut(bookings=[_to_booking_out(db, b) for b in rows])
+    rows = (
+        db.query(Booking)
+        .filter(Booking.user_id == user.id)
+        .order_by(Booking.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    if not rows:
+        return BookingsListOut(bookings=[])
+    # Avoid N+1: prefetch trips, operators, and ratings in batches
+    trip_ids = {b.trip_id for b in rows}
+    trips = {t.id: t for t in db.query(Trip).filter(Trip.id.in_(trip_ids)).all()}
+    op_ids = {t.operator_id for t in trips.values() if t}
+    ops = {o.id: o for o in db.query(Operator).filter(Operator.id.in_(op_ids)).all()} if op_ids else {}
+    rating_rows = db.query(TripRating).filter(TripRating.booking_id.in_([b.id for b in rows])).all()
+    ratings_by_booking = {r.booking_id: r for r in rating_rows}
+
+    out = []
+    for b in rows:
+        t = trips.get(b.trip_id)
+        op = ops.get(t.operator_id) if t else None
+        r = ratings_by_booking.get(b.id)
+        out.append(
+            BookingOut(
+                id=str(b.id),
+                status=b.status,
+                trip_id=str(b.trip_id),
+                operator_name=op.name if op else "",
+                origin=t.origin if t else "",
+                destination=t.destination if t else "",
+                depart_at=t.depart_at if t else datetime.utcnow(),
+                seats_count=b.seats_count,
+                total_price_cents=b.total_price_cents,
+                payment_request_id=b.payment_request_id,
+                my_rating=r.rating if r else None,
+                my_rating_comment=r.comment if r else None,
+                my_rating_created_at=r.created_at if r else None,
+            )
+        )
+    return BookingsListOut(bookings=out)
 
 
 @router.post("/{booking_id}/cancel")
