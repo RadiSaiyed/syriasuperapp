@@ -59,6 +59,17 @@ Service‑Specific Notes
   - Add Alembic migrations or provision schema out‑of‑band before disabling `AUTO_CREATE_SCHEMA` in prod.
   - Enforce Redis rate limit and explicit CORS.
 
+Observability
+- Dashboards: `ops/observability/grafana/dashboards/*`
+  - Existing: `payments.json`, `taxi.json`, `commerce.json`, `doctors.json`, `taxi_wallet.json`, `superapp_overview.json`
+  - Added (minimal: Req/s + p90/p99): `bus.json`, `flights.json`, `stays.json`, `utilities.json`, `freight.json`, `chat.json`, `agriculture.json`, `carmarket.json`, `carrental.json`, `ai_gateway.json`, `livestock.json`, `realestate.json`
+- Alerts: `ops/observability/prometheus/alerts.yml`
+  - Generic: `ServiceDown`, `HighErrorRate`, latency `HighLatencyP99` (>1s), `HighLatencyP99Critical` (>2s)
+  - Payments‑specific: webhook retries
+- Alertmanager: `ops/observability/alertmanager/alertmanager.yml`
+  - Receivers: `ops-admin` (webhook), `slack` (warning/info/critical), `email` (critical only)
+  - Required env: `SLACK_WEBHOOK_URL`, `SLACK_CHANNEL`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`
+
 Deploy Templates
 - Traefik bundle: `ops/deploy/compose-traefik/docker-compose.yml:1`
   - Set `INTERNAL_REQUIRE_HMAC=true` under payments API env.

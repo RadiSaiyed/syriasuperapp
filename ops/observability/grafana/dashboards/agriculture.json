@@ -1,0 +1,13 @@
+{
+  "title": "Agriculture Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {"type":"stat","title":"Req/s (5m)","gridPos":{"x":0,"y":0,"w":8,"h":4},"targets":[{"expr":"sum(rate(http_requests_total{job=\\\"agriculture\\\"}[5m]))"}]},
+    {"type":"timeseries","title":"HTTP p90/p99 latency (s)","gridPos":{"x":0,"y":4,"w":24,"h":8},"targets":[
+      {"expr":"histogram_quantile(0.90, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"agriculture\\\"}[5m])))","refId":"A"},
+      {"expr":"histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"agriculture\\\"}[5m])))","refId":"B"}
+    ]}
+  ]
+}
+
