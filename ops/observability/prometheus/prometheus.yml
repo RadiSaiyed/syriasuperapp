@@ -71,6 +71,12 @@ scrape_configs:
   - job_name: realestate
     static_configs:
       - targets: ['realestate-api:8092']
+  - job_name: parking_onstreet
+    static_configs:
+      - targets: ['parking-onstreet-api:8096']
+  - job_name: parking_offstreet
+    static_configs:
+      - targets: ['parking-offstreet-api:8097']
 
   # Blackbox HTTPS probes for public endpoints (via blackbox-exporter)
   - job_name: blackbox_https

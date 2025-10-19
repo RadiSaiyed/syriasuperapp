@@ -10,6 +10,7 @@ services:
       - parking_onstreet_db_data:/var/lib/postgresql/data
 
   api:
+    container_name: parking-onstreet-api
     build:
       context: ../..
       dockerfile: apps/parking_onstreet/Dockerfile
@@ -19,6 +20,16 @@ services:
       DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/parking_onstreet
     ports:
       - "8096:8096"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.parking-onstreet.rule=Host(`parking-onstreet.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.parking-onstreet.entrypoints=websecure"
+      - "traefik.http.routers.parking-onstreet.tls.certresolver=letsencrypt"
+      - "traefik.http.services.parking-onstreet.loadbalancer.server.port=8096"
     depends_on:
       - db
     command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8096} --reload"]
@@ -27,3 +38,10 @@ services:
 
 volumes:
   parking_onstreet_db_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal
