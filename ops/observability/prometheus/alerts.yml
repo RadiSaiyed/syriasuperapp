@@ -37,6 +37,42 @@ groups:
           summary: "Payments API high latency (p95)"
           description: ">500ms p95 over last 10m"
 
+      - alert: PaymentsHighLatencyP95Critical
+        expr: histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket{job="payments"}[5m]))) > 0.8
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payments API critical latency (p95)"
+          description: ">800ms p95 over last 10m"
+
+      - alert: TaxiHighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket{job="taxi"}[5m]))) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taxi API high latency (p95)"
+          description: ">500ms p95 over last 10m"
+
+      - alert: CommerceHighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket{job="commerce"}[5m]))) > 0.4
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Commerce API high latency (p95)"
+          description: ">400ms p95 over last 10m"
+
+      - alert: DoctorsHighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket{job="doctors"}[5m]))) > 0.6
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Doctors API high latency (p95)"
+          description: ">600ms p95 over last 10m"
+
       - alert: TaxiMatchingLowSuccess
         expr: (sum(rate(taxi_matching_attempts_total{result="assigned"}[5m])) / clamp_min(sum(rate(taxi_matching_attempts_total[5m])), 1e-9)) < 0.6 and sum(rate(taxi_matching_attempts_total[5m])) > 0
         for: 10m
