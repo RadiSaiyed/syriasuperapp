@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: chat
+    ports:
+      - "5444:5432"
+    volumes:
+      - chat_db_data:/var/lib/postgresql/data
+
+  api:
+    container_name: chat-api
+    build:
+      context: ../..
+      dockerfile: apps/chat/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8091:8091"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.chat.rule=Host(`chat.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.chat.entrypoints=websecure"
+      - "traefik.http.routers.chat.tls.certresolver=letsencrypt"
+      - "traefik.http.services.chat.loadbalancer.server.port=8091"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8091} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6390:6379"
+
+volumes:
+  chat_db_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal

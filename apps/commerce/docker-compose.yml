@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: commerce
+    ports:
+      - "5436:5432"
+    volumes:
+      - commerce_db_data:/var/lib/postgresql/data
+
+  api:
+    container_name: commerce-api
+    build:
+      context: ../..
+      dockerfile: apps/commerce/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8083:8083"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.commerce.rule=Host(`commerce.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.commerce.entrypoints=websecure"
+      - "traefik.http.routers.commerce.tls.certresolver=letsencrypt"
+      - "traefik.http.services.commerce.loadbalancer.server.port=8083"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8083} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6382:6379"
+
+volumes:
+  commerce_db_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal

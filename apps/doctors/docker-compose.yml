@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: doctors
+    ports:
+      - "5442:5432"
+    volumes:
+      - doctors_db_data:/var/lib/postgresql/data
+
+  api:
+    container_name: doctors-api
+    build:
+      context: ../..
+      dockerfile: apps/doctors/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8089:8089"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.doctors.rule=Host(`doctors.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.doctors.entrypoints=websecure"
+      - "traefik.http.routers.doctors.tls.certresolver=letsencrypt"
+      - "traefik.http.services.doctors.loadbalancer.server.port=8089"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8089} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6388:6379"
+
+volumes:
+  doctors_db_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal

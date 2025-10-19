@@ -1,0 +1,91 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-payments}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - payments_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "yes"]
+    volumes:
+      - payments_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    container_name: payments-api
+    build:
+      context: ../..
+      dockerfile: apps/payments/Dockerfile
+    env_file:
+      - .env
+    environment:
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-4}
+      UVICORN_LOG_LEVEL: ${UVICORN_LOG_LEVEL:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.payments.rule=Host(`payments.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.payments.entrypoints=websecure"
+      - "traefik.http.routers.payments.tls.certresolver=letsencrypt"
+      - "traefik.http.services.payments.loadbalancer.server.port=8080"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: apps/payments/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["sh", "-lc", "celery -A app.celery_app:celery_app worker --loglevel=INFO -Q payments"]
+    restart: unless-stopped
+
+  beat:
+    build:
+      context: ../..
+      dockerfile: apps/payments/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["sh", "-lc", "celery -A app.celery_app:celery_app beat --loglevel=INFO"]
+    restart: unless-stopped
+
+volumes:
+  payments_db_data:
+  payments_redis_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal

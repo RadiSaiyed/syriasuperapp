@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: stays
+    ports:
+      - "5441:5432"
+    volumes:
+      - stays_db_data:/var/lib/postgresql/data
+
+  api:
+    container_name: stays-api
+    build:
+      context: ../..
+      dockerfile: apps/stays/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8088:8088"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.stays.rule=Host(`stays.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.stays.entrypoints=websecure"
+      - "traefik.http.routers.stays.tls.certresolver=letsencrypt"
+      - "traefik.http.services.stays.loadbalancer.server.port=8088"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8088} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6387:6379"
+
+volumes:
+  stays_db_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal

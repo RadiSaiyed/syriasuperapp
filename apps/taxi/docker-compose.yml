@@ -1,0 +1,75 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: taxi
+    ports:
+      - "5434:5432"
+    volumes:
+      - taxi_db_data:/var/lib/postgresql/data
+
+  api:
+    container_name: taxi-api
+    build:
+      context: ../..
+      dockerfile: apps/taxi/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8081:8081"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.taxi.rule=Host(`taxi.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.taxi.entrypoints=websecure"
+      - "traefik.http.routers.taxi.tls.certresolver=letsencrypt"
+      - "traefik.http.services.taxi.loadbalancer.server.port=8081"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8081} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+  # Optional: MQTT broker (Mosquitto) for realtime location via MQTT
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    profiles: ["realtime"]
+    restart: unless-stopped
+
+  # Optional: MinIO for object storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - taxi_minio_data:/data
+    profiles: ["storage"]
+    restart: unless-stopped
+
+volumes:
+  taxi_db_data:
+  taxi_minio_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal

@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: jobs
+    ports:
+      - "5440:5432"
+    volumes:
+      - jobs_pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6386:6379"
+
+  api:
+    container_name: jobs-api
+    build:
+      context: ../..
+      dockerfile: apps/jobs/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8087:8087"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.jobs.rule=Host(`jobs.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.jobs.entrypoints=websecure"
+      - "traefik.http.routers.jobs.tls.certresolver=letsencrypt"
+      - "traefik.http.services.jobs.loadbalancer.server.port=8087"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8087} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  jobs_pg_data:

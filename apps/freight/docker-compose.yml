@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: freight
+    ports:
+      - "5438:5432"
+    volumes:
+      - freight_db_data:/var/lib/postgresql/data
+
+  api:
+    container_name: freight-api
+    build:
+      context: ../..
+      dockerfile: apps/freight/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8085:8085"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.freight.rule=Host(`freight.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.freight.entrypoints=websecure"
+      - "traefik.http.routers.freight.tls.certresolver=letsencrypt"
+      - "traefik.http.services.freight.loadbalancer.server.port=8085"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8085} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6384:6379"
+
+volumes:
+  freight_db_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal
