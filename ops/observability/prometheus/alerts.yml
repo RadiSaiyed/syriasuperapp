@@ -1,0 +1,83 @@
+groups:
+  - name: superapp
+    rules:
+      - alert: ServiceDown
+        expr: up{job!~"prometheus|grafana"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} down"
+          description: "Prometheus target for {{ $labels.job }} is down on {{ $labels.instance }}"
+
+      - alert: HighErrorRate
+        expr: (sum by(job)(rate(http_requests_total{status=~"5.."}[5m])) / sum by(job)(rate(http_requests_total[5m]))) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate on {{ $labels.job }}"
+          description: "5xx ratio > 1% over 5m"
+
+      - alert: PaymentsWebhookErrors
+        expr: sum(rate(payments_webhook_attempts_total{result="error"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payments webhook delivery errors observed"
+          description: "Delivery errors detected over 10m window"
+
+      - alert: PaymentsHighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket{job="payments"}[5m]))) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payments API high latency (p95)"
+          description: ">500ms p95 over last 10m"
+
+      - alert: TaxiMatchingLowSuccess
+        expr: (sum(rate(taxi_matching_attempts_total{result="assigned"}[5m])) / clamp_min(sum(rate(taxi_matching_attempts_total[5m])), 1e-9)) < 0.6 and sum(rate(taxi_matching_attempts_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taxi matching success low"
+          description: "Matching success < 60% over 10m"
+
+      - alert: TaxiReaperSpike
+        expr: sum(rate(taxi_timeouts_reassigned_total[5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taxi reaper spike"
+          description: "Timeout-based reassignments exceeding 5/min (5m rate)"
+
+      - alert: TaxiPaymentsInternalHighErrors
+        expr: (sum(rate(taxi_payments_internal_calls_total{result="err"}[5m])) / clamp_min(sum(rate(taxi_payments_internal_calls_total[5m])), 1e-9)) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payments internal high error ratio"
+          description: ">20% errors over 10m"
+
+      - alert: TaxiPaymentsCircuitOpen
+        expr: sum(rate(taxi_payments_internal_calls_total{result="skipped_cb_open"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Payments circuit breaker open"
+          description: "Payments circuit breaker skipped calls over 10m"
+
+      - alert: HighLatencyP99
+        expr: histogram_quantile(0.99, sum by (le, job) (rate(http_request_duration_seconds_bucket{job!~"prometheus|grafana"}[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 latency on {{ $labels.job }}"
+          description: ">1s p99 over last 10m"
