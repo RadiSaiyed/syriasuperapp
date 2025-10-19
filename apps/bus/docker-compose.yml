@@ -10,6 +10,7 @@ services:
       - bus_db_data:/var/lib/postgresql/data
 
   api:
+    container_name: bus-api
     build:
       context: ../..
       dockerfile: apps/bus/Dockerfile
@@ -17,6 +18,16 @@ services:
       - .env
     ports:
       - "8082:8082"
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.bus.rule=Host(`bus.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.bus.entrypoints=websecure"
+      - "traefik.http.routers.bus.tls.certresolver=letsencrypt"
+      - "traefik.http.services.bus.loadbalancer.server.port=8082"
     depends_on:
       - db
       - redis
@@ -31,3 +42,10 @@ services:
 
 volumes:
   bus_db_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal
