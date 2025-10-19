@@ -1,0 +1,42 @@
+route:
+  receiver: ops-admin
+  group_by: ['alertname','job']
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 2h
+  routes:
+    - receiver: slack
+      matchers:
+        - severity=~"warning|info|critical"
+      continue: true
+    - receiver: email
+      matchers:
+        - severity=~"critical"
+      continue: true
+
+receivers:
+  - name: ops-admin
+    webhook_configs:
+      - url: http://host.docker.internal:8099/alert
+        send_resolved: true
+  - name: slack
+    slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL}
+        channel: ${SLACK_CHANNEL}
+        send_resolved: true
+        title: "[SuperApp] {{ .CommonLabels.alertname }}"
+        text: |
+          Service: {{ .CommonLabels.job }}
+          Instance: {{ .CommonLabels.instance }}
+          {{ range .Alerts }}
+          - {{ .Annotations.summary }} ({{ .Status }})
+          {{ end }}
+  - name: email
+    email_configs:
+      - to: ${ALERT_EMAIL_TO}
+        from: ${ALERT_EMAIL_FROM}
+        smarthost: ${SMTP_HOST}
+        auth_username: ${SMTP_USER}
+        auth_password: ${SMTP_PASS}
+        require_tls: true
+        send_resolved: true

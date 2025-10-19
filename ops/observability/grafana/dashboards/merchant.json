@@ -1,0 +1,65 @@
+{
+  "title": "Merchant KPIs",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "QR Pays/min",
+      "gridPos": {"x": 0, "y": 0, "w": 8, "h": 6},
+      "targets": [ {"expr": "sum(rate(payments_qr_total[5m]))"} ]
+    },
+    {
+      "type": "graph",
+      "title": "Links/min",
+      "gridPos": {"x": 8, "y": 0, "w": 8, "h": 6},
+      "targets": [ {"expr": "sum by (action) (rate(payments_links_total[5m]))"} ]
+    },
+    {
+      "type": "graph",
+      "title": "Subscriptions/min",
+      "gridPos": {"x": 16, "y": 0, "w": 8, "h": 6},
+      "targets": [ {"expr": "sum by (action) (rate(payments_subscriptions_total[5m]))"} ]
+    },
+    {
+      "type": "graph",
+      "title": "Gross (SYP)/min",
+      "gridPos": {"x": 0, "y": 6, "w": 12, "h": 8},
+      "targets": [ {"expr": "sum(rate(payments_merchant_gross_cents[5m]))"} ]
+    },
+    {
+      "type": "graph",
+      "title": "Fees (SYP)/min",
+      "gridPos": {"x": 12, "y": 6, "w": 12, "h": 8},
+      "targets": [ {"expr": "sum(rate(payments_merchant_fees_cents[5m]))"} ]
+    },
+    {
+      "type": "graph",
+      "title": "Refunds (SYP)/min",
+      "gridPos": {"x": 0, "y": 14, "w": 12, "h": 8},
+      "targets": [ {"expr": "sum(rate(payments_refunds_cents[5m]))"} ]
+    },
+    {
+      "type": "graph",
+      "title": "Net Revenue (SYP)/min",
+      "gridPos": {"x": 12, "y": 14, "w": 12, "h": 8},
+      "targets": [ {"expr": "sum(rate(payments_merchant_gross_cents[5m])) - sum(rate(payments_merchant_fees_cents[5m])) - sum(rate(payments_refunds_cents[5m]))"} ]
+    },
+    {
+      "type": "stat",
+      "title": "Refunds/Gross %",
+      "gridPos": {"x": 0, "y": 22, "w": 8, "h": 6},
+      "targets": [ {"expr": "100 * (sum(rate(payments_refunds_cents[5m])) / sum(rate(payments_merchant_gross_cents[5m])))"} ]
+    }
+    ,
+    {
+      "type": "timeseries",
+      "title": "Payments HTTP p90/p99 latency (s)",
+      "gridPos": {"x": 8, "y": 22, "w": 16, "h": 6},
+      "targets": [
+        {"expr": "histogram_quantile(0.90, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"payments\\\"}[5m])))", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"payments\\\"}[5m])))", "refId": "B"}
+      ]
+    }
+  ]
+}

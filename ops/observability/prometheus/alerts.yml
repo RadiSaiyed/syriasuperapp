@@ -81,3 +81,12 @@ groups:
         annotations:
           summary: "High p99 latency on {{ $labels.job }}"
           description: ">1s p99 over last 10m"
+
+      - alert: HighLatencyP99Critical
+        expr: histogram_quantile(0.99, sum by (le, job) (rate(http_request_duration_seconds_bucket{job!~"prometheus|grafana"}[5m]))) > 2
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical p99 latency on {{ $labels.job }}"
+          description: ">2s p99 over last 10m"

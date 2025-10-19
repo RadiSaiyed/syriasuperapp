@@ -1,0 +1,88 @@
+{
+  "uid": "taxi-wallet",
+  "title": "Taxi Wallet Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Wallet Events (rate)",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (operation, result) (rate(taxi_wallet_events_total[5m]))",
+          "legendFormat": "{{operation}} {{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Successful Top-ups (last 24h)",
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "increase(taxi_wallet_events_total{operation=\"topup\",result=\"success\"}[24h])",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Failed Wallet Ops (last 24h)",
+      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "increase(taxi_wallet_events_total{result=~\"payments_error|invalid|insufficient\"}[24h])",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    }
+    ,
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "HTTP p90/p99 latency (s)",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+      "targets": [
+        {"expr": "histogram_quantile(0.90, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"taxi\\\"}[5m])))", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"taxi\\\"}[5m])))", "refId": "B"}
+      ]
+    }
+  ]
+}
