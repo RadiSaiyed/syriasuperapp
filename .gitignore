@@ -13,6 +13,8 @@ ops/secrets/
 .venv/
 # any local virtualenvs like .venv311, .venv_ops_admin
 .venv*/
+.venv311/
+.venv_ops_admin/
 
 # Node/Flutter build artifacts
 **/build/
