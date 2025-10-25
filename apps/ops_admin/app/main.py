@@ -6,6 +6,10 @@ from typing import List, Dict, Any
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
+import hmac
+import hashlib
+import time
+from urllib.parse import parse_qs
 
 
 class SummaryOut(BaseModel):
@@ -150,3 +154,120 @@ async def alert_hook(request: Request):
 def list_alerts(_: bool = Depends(require_basic)):
     return list(reversed(_alerts))
 
+# --- Slack ChatOps (Slash Commands) ---
+
+def _slack_signing_secret() -> str:
+    return os.getenv("SLACK_SIGNING_SECRET", "")
+
+
+def _verify_slack(req: Request, body: bytes) -> bool:
+    secret = _slack_signing_secret().encode()
+    if not secret:
+        return False
+    ts = req.headers.get("X-Slack-Request-Timestamp", "")
+    sig = req.headers.get("X-Slack-Signature", "")
+    try:
+        ts_int = int(ts)
+    except Exception:
+        return False
+    if abs(time.time() - ts_int) > 60 * 5:
+        return False
+    base = f"v0:{ts}:{body.decode('utf-8', errors='ignore')}".encode()
+    mac = hmac.new(secret, base, hashlib.sha256).hexdigest()
+    expected = f"v0={mac}"
+    return hmac.compare_digest(expected, sig or "")
+
+
+async def _gh_dispatch_chatops(payload: Dict[str, Any]) -> None:
+    token = os.getenv("CHATOPS_GH_TOKEN", "")
+    repo = os.getenv("CHATOPS_GH_REPO", "")  # e.g. owner/repo
+    if not token or not repo:
+        return  # soft-fail: still reply to Slack locally
+    url = f"https://api.github.com/repos/{repo}/dispatches"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    data = {"event_type": "chatops", "client_payload": payload}
+    async with httpx.AsyncClient(timeout=6.0) as client:
+        r = await client.post(url, json=data, headers=headers)
+        r.raise_for_status()
+
+
+def _chatops_help() -> str:
+    return (
+        "• status — show error rate and RPS by service\n"
+        "• alerts — last 5 alerts\n"
+        "• restart <app> — restart service via GH ChatOps (requires self‑hosted runner)\n"
+        "  apps: payments, taxi, food, freight, bus, commerce, doctors, automarket, utilities, stays, chat, jobs\n"
+        "• restart stack <name> — restart preset group (core, food, commerce, taxi, doctors, bus, freight, utilities, automarket, chat, stays, jobs)\n"
+    )
+
+
+@app.post("/slack/command")
+async def slack_command(request: Request):
+    body = await request.body()
+    if not _verify_slack(request, body):
+        raise HTTPException(status_code=401, detail="invalid signature")
+    form = parse_qs(body.decode("utf-8", errors="ignore"))
+    text = (form.get("text") or [""])[0].strip()
+    user = (form.get("user_name") or [""])[0]
+    user_id = (form.get("user_id") or [""])[0]
+    channel_id = (form.get("channel_id") or [""])[0]
+    response_url = (form.get("response_url") or [""])[0]
+
+    # Allowlist filters (optional)
+    users_env = os.getenv("CHATOPS_ALLOWED_USERS", "").strip()
+    chans_env = os.getenv("CHATOPS_ALLOWED_CHANNELS", "").strip()
+    if users_env:
+        allowed_users = {u.strip() for u in users_env.replace(";", ",").split(",") if u.strip()}
+        if user not in allowed_users and user_id not in allowed_users:
+            return {"response_type": "ephemeral", "text": "Not allowed for this user."}
+    if chans_env:
+        allowed_chans = {c.strip() for c in chans_env.replace(";", ",").split(",") if c.strip()}
+        if channel_id not in allowed_chans:
+            return {"response_type": "ephemeral", "text": "Not allowed in this channel."}
+
+    if not text or text.lower() in {"help", "?"}:
+        return {"response_type": "ephemeral", "text": f"Commands:\n{_chatops_help()}"}
+
+    parts = text.split()
+    cmd = parts[0].lower()
+
+    if cmd == "status":
+        try:
+            by_job = await prom_query('sum(rate(http_requests_total[5m])) by (job)')
+            err = await prom_query('100 * sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))')
+            lines = [f"Error rate: {float(err):.3f}%"]
+            if isinstance(by_job, dict):
+                for k, v in sorted(by_job.items()):
+                    lines.append(f"{k}: {float(v):.2f} rps")
+            return {"response_type": "ephemeral", "text": "\n".join(lines)}
+        except Exception as e:
+            return {"response_type": "ephemeral", "text": f"status failed: {e}"}
+
+    if cmd == "alerts":
+        items = list(reversed(_alerts))[:5]
+        if not items:
+            return {"response_type": "ephemeral", "text": "No recent alerts."}
+        lines = ["Recent alerts:"]
+        for a in items:
+            lbl = a.get("labels", {})
+            lines.append(f"- {lbl.get('severity','')}: {lbl.get('alertname','')} ({lbl.get('job','')})")
+        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+
+    if cmd == "restart" and len(parts) >= 2:
+        # Supports: restart <app>   or   restart stack <name>
+        if parts[1].lower() == "stack" and len(parts) >= 3:
+            app = f"stack:{parts[2].lower()}"
+        else:
+            app = parts[1].lower()
+        payload = {"action": "deploy-restart", "app": app, "actor": user, "channel_id": channel_id, "response_url": response_url}
+        try:
+            await _gh_dispatch_chatops(payload)
+            return {"response_type": "ephemeral", "text": f"Restart requested for {app}. I will update here when done."}
+        except Exception as e:
+            return {"response_type": "ephemeral", "text": f"Failed to submit restart for {app}: {e}"}
+
+    return {"response_type": "ephemeral", "text": f"Unknown command.\n{_chatops_help()}"}

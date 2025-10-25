@@ -56,6 +56,20 @@ def checkout(request: Request, user: User = Depends(get_current_user), db: Sessi
         mi = db.get(MenuItem, it.menu_item_id)
         if mi is None or mi.restaurant_id != restaurant_id or not mi.available:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid item in cart")
+        # Inventory auto-decrement (if managed)
+        if getattr(mi, "stock_qty", None) is not None:
+            if mi.stock_qty < it.qty:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Insufficient stock")
+            mi.stock_qty -= it.qty
+            try:
+                from ..config import settings as _settings
+                if mi.stock_qty <= 0:
+                    mi.available = False
+                if mi.stock_qty <= max(0, getattr(_settings, "STOCK_LOW_THRESHOLD", 3)):
+                    notify("food.stock.low", {"menu_item_id": str(mi.id), "stock_qty": int(mi.stock_qty)})
+                    send_webhooks(db, "food.stock.low", {"menu_item_id": str(mi.id), "stock_qty": int(mi.stock_qty)})
+            except Exception:
+                pass
         sub = mi.price_cents * it.qty
         total += sub
         db.add(
@@ -66,6 +80,7 @@ def checkout(request: Request, user: User = Depends(get_current_user), db: Sessi
                 price_cents_snapshot=mi.price_cents,
                 qty=it.qty,
                 subtotal_cents=sub,
+                station_snapshot=getattr(mi, 'station', None),
             )
         )
         db.delete(it)

@@ -68,7 +68,7 @@ def create_booking(payload: CreateBookingIn, request: Request, user: User = Depe
             raise HTTPException(status_code=400, detail="Not enough free seats to auto-assign")
 
     total = trip.price_cents * payload.seats_count
-    # Promo application
+    # Promo application (scoped to operator if operator_id is set)
     if payload.promo_code:
         pc = db.query(PromoCode).filter(PromoCode.code == payload.promo_code).one_or_none()
         if pc and pc.active:
@@ -79,7 +79,8 @@ def create_booking(payload: CreateBookingIn, request: Request, user: User = Depe
                     if pc.per_user_max_uses:
                         cnt = db.query(func.count(PromoRedemption.id)).filter(PromoRedemption.promo_code_id == pc.id, PromoRedemption.user_id == user.id).scalar() or 0
                         per_user_ok = cnt < pc.per_user_max_uses
-                    if per_user_ok and (pc.min_total_cents is None or total >= pc.min_total_cents):
+                    op_ok = (pc.operator_id is None) or (trip and str(pc.operator_id) == str(trip.operator_id))
+                    if op_ok and per_user_ok and (pc.min_total_cents is None or total >= pc.min_total_cents):
                         disc = 0
                         if pc.percent_off_bps:
                             disc = max(disc, int((total * pc.percent_off_bps + 5000) // 10000))
@@ -101,7 +102,7 @@ def create_booking(payload: CreateBookingIn, request: Request, user: User = Depe
             row.booking_id = booking.id
     if payload.promo_code:
         pc = db.query(PromoCode).filter(PromoCode.code == payload.promo_code).one_or_none()
-        if pc and pc.active:
+        if pc and pc.active and ((pc.operator_id is None) or (trip and str(pc.operator_id) == str(trip.operator_id))):
             pc.uses_count = (pc.uses_count or 0) + 1
             db.add(PromoRedemption(promo_code_id=pc.id, booking_id=booking.id, user_id=user.id))
 

@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: payments
+    ports:
+      - "5433:5432"
+    volumes:
+      - payments_db_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/payments/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8080} --reload"]
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: apps/payments/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-lc", "celery -A app.celery_app:celery_app worker --loglevel=INFO -Q payments"]
+
+  beat:
+    build:
+      context: ../..
+      dockerfile: apps/payments/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    command: ["sh", "-lc", "celery -A app.celery_app:celery_app beat --loglevel=INFO"]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  payments_db_data:

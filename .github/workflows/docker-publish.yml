@@ -14,8 +14,9 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        app: [payments, taxi, bus, flights, commerce, utilities, freight, automarket, jobs, stays, doctors, food, chat]
+        app: [payments, taxi, bus, flights, commerce, utilities, freight, jobs, stays, doctors, food, chat]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx

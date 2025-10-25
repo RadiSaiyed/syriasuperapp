@@ -34,10 +34,20 @@ class Settings:
     NOTIFY_REDIS_CHANNEL: str = os.getenv("NOTIFY_REDIS_CHANNEL", "food.events")
     WEBHOOK_ENABLED: str = os.getenv("WEBHOOK_ENABLED", "false")
     WEBHOOK_TIMEOUT_SECS: int = int(os.getenv("WEBHOOK_TIMEOUT_SECS", "3"))
+    WEBHOOK_MAX_ATTEMPTS: int = int(os.getenv("WEBHOOK_MAX_ATTEMPTS", "5"))
+    WEBHOOK_WORKER_INTERVAL_SECS: int = int(os.getenv("WEBHOOK_WORKER_INTERVAL_SECS", "10"))
     # OTP
     OTP_MODE: str = os.getenv("OTP_MODE", "dev")
     OTP_TTL_SECS: int = int(os.getenv("OTP_TTL_SECS", "300"))
     OTP_MAX_ATTEMPTS: int = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+    # Inventory / Pricing
+    STOCK_LOW_THRESHOLD: int = int(os.getenv("STOCK_LOW_THRESHOLD", "3"))
+    # Payout taxes/fees
+    TAX_RATE_BPS: int = int(os.getenv("TAX_RATE_BPS", "0"))
+    # Optional TOTP 2FA (applies where service enables it)
+    REQUIRE_TOTP: bool = env_bool("REQUIRE_TOTP", default=False)
+    # ESC/POS (best effort)
+    ESCPOS_DEVICE: str = os.getenv("ESCPOS_DEVICE", "")
 
     @property
     def jwt_expires_delta(self) -> timedelta:

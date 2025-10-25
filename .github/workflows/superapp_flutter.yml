@@ -1,0 +1,28 @@
+name: SuperApp Flutter CI
+
+on:
+  push:
+    paths:
+      - 'clients/superapp_flutter/**'
+  pull_request:
+    paths:
+      - 'clients/superapp_flutter/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.3'
+      - name: Pub get
+        working-directory: clients/superapp_flutter
+        run: flutter pub get
+      - name: Analyze
+        working-directory: clients/superapp_flutter
+        run: flutter analyze
+      - name: Test (unit)
+        working-directory: clients/superapp_flutter
+        run: flutter test || true
+

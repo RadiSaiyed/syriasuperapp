@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: doctors
+    ports:
+      - "5542:5432"
+    volumes:
+      - doctors_doctor_db_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/doctors_doctor/Dockerfile
+    env_file:
+      - ../../apps/doctors/.env
+    environment:
+      PYTHONPATH: /app
+    ports:
+      - "8103:8103"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn operators.doctors_doctor.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8103} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6493:6379"
+
+volumes:
+  doctors_doctor_db_data:
+

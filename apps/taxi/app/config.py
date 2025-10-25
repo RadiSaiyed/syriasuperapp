@@ -19,6 +19,11 @@ class Settings:
     AUTO_CREATE_SCHEMA: bool = env_bool("AUTO_CREATE_SCHEMA", default=DEV_MODE)
     BASE_FARE_CENTS: int = int(os.getenv("BASE_FARE_CENTS", "4000"))
     PER_KM_CENTS: int = int(os.getenv("PER_KM_CENTS", "7500"))
+    LOYALTY_RIDE_INTERVAL: int = int(os.getenv("LOYALTY_RIDE_INTERVAL", "10"))
+    LOYALTY_RIDER_FREE_CAP_CENTS: int = int(os.getenv("LOYALTY_RIDER_FREE_CAP_CENTS", "50000"))
+    TRAFFIC_BASE_PACE_MIN_PER_KM: float = float(os.getenv("TRAFFIC_BASE_PACE_MIN_PER_KM", "2.0"))
+    TRAFFIC_SURCHARGE_PER_MIN_CENTS: int = int(os.getenv("TRAFFIC_SURCHARGE_PER_MIN_CENTS", "1000"))
+    TRAFFIC_SURCHARGE_MAX_MULTIPLIER: float = float(os.getenv("TRAFFIC_SURCHARGE_MAX_MULTIPLIER", "3.0"))
     ASSIGN_RADIUS_KM: float = float(os.getenv("ASSIGN_RADIUS_KM", "5"))
     PAYMENTS_BASE_URL: str = os.getenv("PAYMENTS_BASE_URL", "http://host.docker.internal:8080")
     PAYMENTS_INTERNAL_SECRET: str = os.getenv("PAYMENTS_INTERNAL_SECRET", "dev_secret")
@@ -38,18 +43,15 @@ class Settings:
     SURGE_AVAILABLE_THRESHOLD: int = int(os.getenv("SURGE_AVAILABLE_THRESHOLD", "3"))
     SURGE_STEP_PER_MISSING: float = float(os.getenv("SURGE_STEP_PER_MISSING", "0.25"))
     SURGE_MAX_MULTIPLIER: float = float(os.getenv("SURGE_MAX_MULTIPLIER", "2.0"))
-    # Maps provider (TomTom only)
+    # Maps provider (Google Maps)
     MAPS_INCLUDE_POLYLINE: bool = os.getenv("MAPS_INCLUDE_POLYLINE", "true").lower() == "true"
-    TOMTOM_BASE_URL: str = os.getenv("TOMTOM_BASE_URL", "https://api.tomtom.com")
-    TOMTOM_API_KEY: str | None = os.getenv("TOMTOM_API_KEY") or os.getenv("TOMTOM_API_KEY_TAXI")
-    TOMTOM_USE_TRAFFIC: bool = os.getenv("TOMTOM_USE_TRAFFIC", "true").lower() == "true"
-    TOMTOM_TIMEOUT_SECS: float = float(os.getenv("TOMTOM_TIMEOUT_SECS", "5.0"))
-    TOMTOM_MAX_RETRIES: int = int(os.getenv("TOMTOM_MAX_RETRIES", "2"))
-    TOMTOM_BACKOFF_SECS: float = float(os.getenv("TOMTOM_BACKOFF_SECS", "0.25"))
-    TOMTOM_AVOID_CLOSED: bool = os.getenv("TOMTOM_AVOID_CLOSED", "true").lower() == "true"
-    TOMTOM_FLOW_ZOOM: int = int(os.getenv("TOMTOM_FLOW_ZOOM", "10"))
-    TOMTOM_TRAFFIC_AUGMENT: bool = os.getenv("TOMTOM_TRAFFIC_AUGMENT", "true").lower() == "true"
-    TOMTOM_GEOCODER_CACHE_SECS: int = int(os.getenv("TOMTOM_GEOCODER_CACHE_SECS", "120"))
+    GOOGLE_MAPS_BASE_URL: str = os.getenv("GOOGLE_MAPS_BASE_URL", "https://maps.googleapis.com")
+    GOOGLE_MAPS_API_KEY: str | None = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_MAPS_API_KEY_TAXI")
+    GOOGLE_USE_TRAFFIC: bool = os.getenv("GOOGLE_USE_TRAFFIC", "true").lower() == "true"
+    MAPS_TIMEOUT_SECS: float = float(os.getenv("MAPS_TIMEOUT_SECS", os.getenv("GOOGLE_TIMEOUT_SECS", "5.0")))
+    MAPS_MAX_RETRIES: int = int(os.getenv("MAPS_MAX_RETRIES", os.getenv("GOOGLE_MAX_RETRIES", "2")))
+    MAPS_BACKOFF_SECS: float = float(os.getenv("MAPS_BACKOFF_SECS", os.getenv("GOOGLE_BACKOFF_SECS", "0.25")))
+    MAPS_GEOCODER_CACHE_SECS: int = int(os.getenv("MAPS_GEOCODER_CACHE_SECS", "120"))
     # Ride classes: price multipliers (e.g. "standard=1.0,comfort=1.1,yellow=1.0,vip=1.5,van=1.4,electro=0.95")
     RIDE_CLASS_MULTIPLIERS_RAW: str = os.getenv(
         "RIDE_CLASS_MULTIPLIERS",
@@ -221,5 +223,5 @@ if not settings.DEV_MODE:
         raise RuntimeError("Provide ADMIN_TOKEN or ADMIN_TOKEN_SHA256 when ENV!=dev")
     if settings.OTP_SMS_PROVIDER.lower() == "http" and not settings.OTP_SMS_HTTP_URL:
         raise RuntimeError("OTP_SMS_HTTP_URL must be set when OTP_SMS_PROVIDER=http")
-    if not settings.TOMTOM_API_KEY:
-        raise RuntimeError("TOMTOM_API_KEY must be set when ENV!=dev")
+    if not settings.GOOGLE_MAPS_API_KEY:
+        raise RuntimeError("GOOGLE_MAPS_API_KEY must be set when ENV!=dev")

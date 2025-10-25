@@ -1,0 +1,15 @@
+Use Alembic from this directory.
+
+Commands
+- Generate initial migration (autogenerate):
+  DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/commerce alembic revision --autogenerate -m "init"
+- Apply to head:
+  DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/commerce alembic upgrade head
+
+Inspect
+- Current heads: `alembic heads`, current DB rev: `alembic current`
+- Downgrade one: `alembic downgrade -1`; upgrade: `alembic upgrade head`
+
+Notes
+- env.py targets `app.models.Base` for autogenerate.
+- Review autogenerate output before applying.

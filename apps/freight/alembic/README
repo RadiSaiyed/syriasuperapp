@@ -1,0 +1,10 @@
+Use Alembic from this directory.
+
+Commands
+- Generate initial migration (autogenerate):
+  DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5438/freight alembic revision --autogenerate -m "init"
+- Apply to head:
+  DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5438/freight alembic upgrade head
+
+Notes
+- env.py targets `app.models.Base` for autogenerate. Review diffs before applying.

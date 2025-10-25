@@ -1,0 +1,29 @@
+# Exclude local secrets and dev artifacts
+ops/secrets/
+
+# Environment files (never commit real secrets)
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/.venv/
+.venv/
+# any local virtualenvs like .venv311, .venv_ops_admin
+.venv*/
+
+# Node/Flutter build artifacts
+**/build/
+**/dist/
+**/.dart_tool/
+**/.packages
+
+# macOS Finder cruft
+**/.DS_Store
+ops/deploy/hetzner/.ssh/
+ops/deploy/hetzner/terraform/.terraform/
+ops/deploy/hetzner/terraform/terraform.tfstate*
+cloud-init.rendered.yml
+ops/deploy/compose-traefik/.env.prod

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Gateway Demo</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; color: #222; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    input, textarea, button, select { font-size: 14px; padding: 8px; }
+    textarea { width: 100%; height: 120px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 10px 0; }
+    .tool { background: #f7f7f7; border-radius: 6px; padding: 8px; margin: 6px 0; }
+    .muted { color: #666; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
+    .ok { color: #0a7; }
+    .err { color: #c00; }
+    label { font-weight: 600; }
+  </style>
+  <script>
+    async function postJSON(url, body, token) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
+        },
+        body: JSON.stringify(body)
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }
+      if (!res.ok) {
+        const err = new Error('HTTP ' + res.status);
+        err.status = res.status; err.data = data; throw err;
+      }
+      return data;
+    }
+
+    async function askAssistant() {
+      const base = document.getElementById('base').value || 'http://localhost:8099';
+      const token = document.getElementById('token').value.trim();
+      const msg = document.getElementById('message').value.trim();
+      setStatus('');
+      if (!msg) { setStatus('Bitte eine Nachricht eingeben.', true); return; }
+      try {
+        const data = await postJSON(base + '/v1/chat', {
+          messages: [{ role: 'user', content: msg }],
+          allow_tools: true
+        }, token);
+        renderAssistant(data);
+      } catch (e) {
+        setStatus('Fehler: ' + (e.data?.detail || e.message), true);
+      }
+    }
+
+    function renderAssistant(data) {
+      document.getElementById('assistant').textContent = data.content || '';
+      const tDiv = document.getElementById('tools');
+      tDiv.innerHTML = '';
+      (data.tool_calls || []).forEach((t, idx) => {
+        const d = document.createElement('div');
+        d.className = 'tool';
+        const args = t.arguments || {};
+        d.innerHTML = '<div><b>' + (t.name || 'tool') + '</b></div>' +
+                      '<div class="mono">' + JSON.stringify(args, null, 2) + '</div>' +
+                      '<div class="row"><button onclick="confirmTool(\'' + encodeURIComponent(JSON.stringify(t)) + '\')">Bestätigen & Ausführen</button></div>';
+        tDiv.appendChild(d);
+      });
+      if ((data.executed_tool)) {
+        document.getElementById('execName').textContent = data.executed_tool;
+        document.getElementById('execResult').textContent = JSON.stringify(data.execution_result || {}, null, 2);
+        document.getElementById('execCard').style.display = 'block';
+      } else {
+        document.getElementById('execCard').style.display = 'none';
+      }
+    }
+
+    async function confirmTool(tEncoded) {
+      const t = JSON.parse(decodeURIComponent(tEncoded));
+      const base = document.getElementById('base').value || 'http://localhost:8099';
+      const token = document.getElementById('token').value.trim();
+      const userId = document.getElementById('userId').value.trim();
+      if (!userId) { setStatus('User ID wird benötigt.', true); return; }
+      try {
+        const data = await postJSON(base + '/v1/chat', {
+          messages: [{ role: 'user', content: '(confirm)' }],
+          confirm: true,
+          selected_tool: { tool: t.name, args: t.arguments || {}, user_id: userId }
+        }, token);
+        setStatus('Aktion ausgeführt.', false);
+        renderAssistant(data);
+      } catch (e) {
+        setStatus('Fehler bei Ausführung: ' + (e.data?.detail || e.message), true);
+      }
+    }
+
+    async function doSearch() {
+      const base = document.getElementById('base').value || 'http://localhost:8099';
+      const q = document.getElementById('search').value.trim();
+      if (!q) { setStatus('Suchbegriff fehlt.', true); return; }
+      try {
+        const data = await postJSON(base + '/v1/store/search', { collection: 'help', query: q, k: 5 });
+        document.getElementById('searchRes').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        setStatus('Search Fehler: ' + (e.data?.detail || e.message), true);
+      }
+    }
+
+    async function doOCR() {
+      const base = document.getElementById('base').value || 'http://localhost:8099';
+      const hint = document.getElementById('ocr').value.trim();
+      if (!hint) { setStatus('text_hint fehlt.', true); return; }
+      try {
+        const data = await postJSON(base + '/v1/ocr', { text_hint: hint });
+        document.getElementById('ocrRes').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        setStatus('OCR Fehler: ' + (e.data?.detail || e.message), true);
+      }
+    }
+
+    function setStatus(msg, isErr) {
+      const s = document.getElementById('status');
+      s.textContent = msg;
+      s.className = isErr ? 'err' : 'ok';
+    }
+  </script>
+</head>
+<body>
+  <h2>AI Gateway Demo</h2>
+  <div class="card">
+    <div class="row">
+      <label for="base">Gateway URL</label>
+      <input id="base" placeholder="http://localhost:8099" value="http://localhost:8099" size="40" />
+    </div>
+    <div class="row">
+      <label for="token">User JWT</label>
+      <input id="token" placeholder="optional" size="60" />
+    </div>
+    <div class="row">
+      <label for="userId">User ID</label>
+      <input id="userId" placeholder="UUID des Nutzers (für Tool-Ausführung)" size="40" />
+    </div>
+    <div id="status" class="muted"></div>
+  </div>
+
+  <div class="card">
+    <h3>Assistant</h3>
+    <textarea id="message" placeholder="z.B. 'Rechnung 123 bezahlen' oder 'Parken Zone ZONE123 Kennzeichen ABC123 für 30 Minuten'"></textarea>
+    <div class="row">
+      <button onclick="askAssistant()">Fragen</button>
+    </div>
+    <div>
+      <div><b>Antwort:</b></div>
+      <div id="assistant" class="mono"></div>
+      <div><b>Vorgeschlagene Aktionen</b></div>
+      <div id="tools"></div>
+    </div>
+    <div id="execCard" class="card" style="display:none">
+      <div><b>Ausgeführt:</b> <span id="execName"></span></div>
+      <div class="mono" id="execResult"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>SuperSearch</h3>
+    <input id="search" placeholder="Suchbegriff" size="40" />
+    <button onclick="doSearch()">Suchen</button>
+    <div class="mono" id="searchRes"></div>
+  </div>
+
+  <div class="card">
+    <h3>OCR (MVP)</h3>
+    <textarea id="ocr" placeholder="z.B. 'Invoice #123 Total: 25000 Due 2025-11-01'"></textarea>
+    <button onclick="doOCR()">Extrahieren</button>
+    <div class="mono" id="ocrRes"></div>
+  </div>
+
+  <p class="muted">Hinweis: In DEV ist CORS offen. Für PROD konfiguriere ALLOWED_ORIGINS.</p>
+</body>
+</html>
+

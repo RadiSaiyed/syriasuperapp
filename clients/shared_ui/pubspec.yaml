@@ -1,0 +1,15 @@
+name: shared_ui
+description: Shared UI theme and tokens for Syria Super‑App
+publish_to: 'none'
+version: 0.0.1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  uses-material-design: false
+

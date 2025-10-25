@@ -1,0 +1,11 @@
+Use alembic commands from this directory:
+
+- Generate initial migration:
+  DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5434/taxi alembic revision --autogenerate -m "init"
+- Apply:
+  DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5434/taxi alembic upgrade head
+
+Guidelines
+- One change per migration; review autogenerate output
+- Use staging before production; have rollback plan
+

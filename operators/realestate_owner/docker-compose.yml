@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: realestate
+    ports:
+      - "5537:5432"
+    volumes:
+      - realestate_owner_db_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/realestate_owner/Dockerfile
+    environment:
+      ENV: dev
+      APP_PORT: 8102
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/realestate
+      JWT_SECRET: dev_secret_realestate
+      OTP_MODE: dev
+      PYTHONPATH: /app
+    ports:
+      - "8102:8102"
+    depends_on:
+      - db
+    command: ["sh", "-c", "uvicorn operators.realestate_owner.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8102} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  realestate_owner_db_data:

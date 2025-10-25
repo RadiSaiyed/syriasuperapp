@@ -1,0 +1,27 @@
+name: ops_admin_flutter
+description: macOS Admin App (Flutter Desktop) for Super‑App monitoring
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
+  shared_ui:
+    path: ../shared_ui
+  qr_flutter: ^4.1.0
+  printing: ^5.12.0
+  pdf: ^3.11.1
+  path_provider: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

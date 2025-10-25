@@ -1,0 +1,149 @@
+Launching lib/main.dart on Chrome in debug mode...
+Waiting for connection from debug service on Chrome...              9.6s
+This app is linked to the debug service: ws://127.0.0.1:53901/tEgzjUBhSPE=/ws
+Debug service listening on ws://127.0.0.1:53901/tEgzjUBhSPE=/ws
+
+Flutter run key commands.
+r Hot reload. 🔥🔥🔥
+R Hot restart.
+h List all available interactive commands.
+d Detach (terminate "flutter run" but leave application running).
+c Clear the screen
+q Quit (terminate the application on the device).
+
+A Dart VM Service on Chrome is available at: http://127.0.0.1:53901/tEgzjUBhSPE=
+Starting application from main method in: org-dartlang-app:/web_entrypoint.dart.
+The Flutter DevTools debugger and profiler on Chrome is available at: http://127.0.0.1:9100?uri=http://127.0.0.1:53901/tEgzjUBhSPE=
+DartError: Unsupported operation: As the Web URL cannot be changed without restarting the application, link streams are unimplemented on this platform.
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3       throw_
+package:uni_links_web/uni_links_web.dart 19:37                                    get linkStream
+package:uni_links/uni_links.dart 23:61                                            get linkStream
+package:uni_links/uni_links.dart 32:39                                            get uriLinkStream
+package:payments_flutter/main.dart 68:30                                          <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 623:19               <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 648:23               <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 594:19               <fn>
+dart-sdk/lib/async/zone.dart 1849:54                                              runUnary
+dart-sdk/lib/async/future_impl.dart 222:18                                        handleValue
+dart-sdk/lib/async/future_impl.dart 948:44                                        handleValueCallback
+dart-sdk/lib/async/future_impl.dart 977:13                                        _propagateToListeners
+dart-sdk/lib/async/future_impl.dart 720:5                                         [_completeWithValue]
+dart-sdk/lib/async/future_impl.dart 804:7                                         <fn>
+dart-sdk/lib/async/schedule_microtask.dart 40:34                                  _microtaskLoop
+dart-sdk/lib/async/schedule_microtask.dart 49:5                                   _startMicrotaskLoop
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77  tear
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 188:69               <fn>
+Application finished.
+Launching lib/main.dart on Chrome in debug mode...
+Waiting for connection from debug service on Chrome...              9.8s
+This app is linked to the debug service: ws://127.0.0.1:53994/e0lVjdMrkBQ=/ws
+Debug service listening on ws://127.0.0.1:53994/e0lVjdMrkBQ=/ws
+
+Flutter run key commands.
+r Hot reload. 🔥🔥🔥
+R Hot restart.
+h List all available interactive commands.
+d Detach (terminate "flutter run" but leave application running).
+c Clear the screen
+q Quit (terminate the application on the device).
+
+A Dart VM Service on Chrome is available at: http://127.0.0.1:53994/e0lVjdMrkBQ=
+Starting application from main method in: org-dartlang-app:/web_entrypoint.dart.
+DartError: Unsupported operation: As the Web URL cannot be changed without restarting the application, link streams are unimplemented on this platform.
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3       throw_
+package:uni_links_web/uni_links_web.dart 19:37                                    get linkStream
+package:uni_links/uni_links.dart 23:61                                            get linkStream
+package:uni_links/uni_links.dart 32:39                                            get uriLinkStream
+package:payments_flutter/main.dart 68:30                                          <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 623:19               <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 648:23               <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 594:19               <fn>
+dart-sdk/lib/async/zone.dart 1849:54                                              runUnary
+dart-sdk/lib/async/future_impl.dart 222:18                                        handleValue
+dart-sdk/lib/async/future_impl.dart 948:44                                        handleValueCallback
+dart-sdk/lib/async/future_impl.dart 977:13                                        _propagateToListeners
+dart-sdk/lib/async/future_impl.dart 720:5                                         [_completeWithValue]
+dart-sdk/lib/async/future_impl.dart 804:7                                         <fn>
+dart-sdk/lib/async/schedule_microtask.dart 40:34                                  _microtaskLoop
+dart-sdk/lib/async/schedule_microtask.dart 49:5                                   _startMicrotaskLoop
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77  tear
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 188:69               <fn>
+The Flutter DevTools debugger and profiler on Chrome is available at: http://127.0.0.1:9100?uri=http://127.0.0.1:53994/e0lVjdMrkBQ=
+Application finished.
+Launching lib/main.dart on Chrome in debug mode...
+Waiting for connection from debug service on Chrome...              9.9s
+This app is linked to the debug service: ws://127.0.0.1:54281/ou70GFZIpIM=/ws
+Debug service listening on ws://127.0.0.1:54281/ou70GFZIpIM=/ws
+
+Flutter run key commands.
+r Hot reload. 🔥🔥🔥
+R Hot restart.
+h List all available interactive commands.
+d Detach (terminate "flutter run" but leave application running).
+c Clear the screen
+q Quit (terminate the application on the device).
+
+A Dart VM Service on Chrome is available at: http://127.0.0.1:54281/ou70GFZIpIM=
+Starting application from main method in: org-dartlang-app:/web_entrypoint.dart.
+DartError: Unsupported operation: As the Web URL cannot be changed without restarting the application, link streams are unimplemented on this platform.
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3       throw_
+package:uni_links_web/uni_links_web.dart 19:37                                    get linkStream
+package:uni_links/uni_links.dart 23:61                                            get linkStream
+package:uni_links/uni_links.dart 32:39                                            get uriLinkStream
+package:payments_flutter/main.dart 68:30                                          <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 623:19               <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 648:23               <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 594:19               <fn>
+dart-sdk/lib/async/zone.dart 1849:54                                              runUnary
+dart-sdk/lib/async/future_impl.dart 222:18                                        handleValue
+dart-sdk/lib/async/future_impl.dart 948:44                                        handleValueCallback
+dart-sdk/lib/async/future_impl.dart 977:13                                        _propagateToListeners
+dart-sdk/lib/async/future_impl.dart 720:5                                         [_completeWithValue]
+dart-sdk/lib/async/future_impl.dart 804:7                                         <fn>
+dart-sdk/lib/async/schedule_microtask.dart 40:34                                  _microtaskLoop
+dart-sdk/lib/async/schedule_microtask.dart 49:5                                   _startMicrotaskLoop
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77  tear
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 188:69               <fn>
+The Flutter DevTools debugger and profiler on Chrome is available at: http://127.0.0.1:9100?uri=http://127.0.0.1:54281/ou70GFZIpIM=
+Application finished.
+Launching lib/main.dart on Chrome in debug mode...
+Waiting for connection from debug service on Chrome...          
+The Dart compiler exited unexpectedly.
+Waiting for connection from debug service on Chrome...           1,163ms
+Failed to compile application.
+Launching lib/main.dart on Chrome in debug mode...
+Waiting for connection from debug service on Chrome...              9.0s
+This app is linked to the debug service: ws://127.0.0.1:54379/4q2Zig7gC_U=/ws
+Debug service listening on ws://127.0.0.1:54379/4q2Zig7gC_U=/ws
+
+Flutter run key commands.
+r Hot reload. 🔥🔥🔥
+R Hot restart.
+h List all available interactive commands.
+d Detach (terminate "flutter run" but leave application running).
+c Clear the screen
+q Quit (terminate the application on the device).
+
+A Dart VM Service on Chrome is available at: http://127.0.0.1:54379/4q2Zig7gC_U=
+Starting application from main method in: org-dartlang-app:/web_entrypoint.dart.
+The Flutter DevTools debugger and profiler on Chrome is available at: http://127.0.0.1:9100?uri=http://127.0.0.1:54379/4q2Zig7gC_U=
+DartError: Unsupported operation: As the Web URL cannot be changed without restarting the application, link streams are unimplemented on this platform.
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3       throw_
+package:uni_links_web/uni_links_web.dart 19:37                                    get linkStream
+package:uni_links/uni_links.dart 23:61                                            get linkStream
+package:uni_links/uni_links.dart 32:39                                            get uriLinkStream
+package:payments_flutter/main.dart 68:30                                          <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 623:19               <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 648:23               <fn>
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 594:19               <fn>
+dart-sdk/lib/async/zone.dart 1849:54                                              runUnary
+dart-sdk/lib/async/future_impl.dart 222:18                                        handleValue
+dart-sdk/lib/async/future_impl.dart 948:44                                        handleValueCallback
+dart-sdk/lib/async/future_impl.dart 977:13                                        _propagateToListeners
+dart-sdk/lib/async/future_impl.dart 720:5                                         [_completeWithValue]
+dart-sdk/lib/async/future_impl.dart 804:7                                         <fn>
+dart-sdk/lib/async/schedule_microtask.dart 40:34                                  _microtaskLoop
+dart-sdk/lib/async/schedule_microtask.dart 49:5                                   _startMicrotaskLoop
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77  tear
+dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 188:69               <fn>
+Application finished.

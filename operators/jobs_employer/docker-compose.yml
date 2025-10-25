@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: jobs
+    ports:
+      - "5540:5432"
+    volumes:
+      - jobs_employer_db_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/jobs_employer/Dockerfile
+    env_file:
+      - ../../apps/jobs/.env
+    environment:
+      PYTHONPATH: /app
+    ports:
+      - "8107:8107"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn operators.jobs_employer.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8107} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6497:6379"
+
+volumes:
+  jobs_employer_db_data:
+

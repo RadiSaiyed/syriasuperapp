@@ -1,0 +1,18 @@
+Use alembic commands from this directory:
+
+- Create/refresh env: already checked-in.
+- Generate initial migration:
+  DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5433/payments alembic revision --autogenerate -m "init"
+- Apply:
+  DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5433/payments alembic upgrade head
+
+Rollback / Branching
+- Show current head(s): `alembic heads` and current DB rev: `alembic current`
+- Downgrade one step: `alembic downgrade -1` (or to a specific rev ID)
+- Re-apply to head: `alembic upgrade head`
+- Merge heads (if multiple): `alembic merge -m "merge heads" <rev1> <rev2>` then `alembic upgrade head`
+- Stamp DB without running migrations (sync state): `alembic stamp head`
+
+Guidelines
+- One feature/change per migration; avoid autogenerate on already-migrated dev DBs without review
+- Always run migrations in staging before prod; add DB backups and roll-forward plans

@@ -1,0 +1,200 @@
+name: ChatOps Exec
+
+on:
+  repository_dispatch:
+    types: [chatops]
+
+jobs:
+  exec:
+    # Use a self-hosted runner on the target host with docker perms
+    runs-on: self-hosted
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse payload
+        id: vars
+        run: |
+          set -e
+          echo "EVENT_PATH=$GITHUB_EVENT_PATH"
+          ACTION=$(jq -r '.client_payload.action' "$GITHUB_EVENT_PATH")
+          APP=$(jq -r '.client_payload.app // ""' "$GITHUB_EVENT_PATH")
+          RESP_URL=$(jq -r '.client_payload.response_url // ""' "$GITHUB_EVENT_PATH")
+          ACTOR=$(jq -r '.client_payload.actor // ""' "$GITHUB_EVENT_PATH")
+          echo "action=$ACTION" >> $GITHUB_OUTPUT
+          echo "app=$APP" >> $GITHUB_OUTPUT
+          echo "resp_url=$RESP_URL" >> $GITHUB_OUTPUT
+          echo "actor=$ACTOR" >> $GITHUB_OUTPUT
+
+      - name: Ensure deploy env
+        run: |
+          test -f ops/deploy/compose-traefik/docker-compose.yml
+          if [ ! -f ops/deploy/compose-traefik/.env.prod ]; then
+            echo ".env.prod missing in deploy dir" >&2
+            exit 1
+          fi
+
+      - name: Execute action
+        id: exec
+        working-directory: ops/deploy/compose-traefik
+        env:
+          ACTION: ${{ steps.vars.outputs.action }}
+          APP: ${{ steps.vars.outputs.app }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" != "deploy-restart" ]; then
+            echo "Unknown action: $ACTION" >&2; exit 1;
+          fi
+          svc_for() {
+            case "$1" in
+              payments) echo "payments-api payments-worker payments-beat";;
+              taxi) echo "taxi-api taxi-reaper";;
+              food) echo "food-api";;
+              freight) echo "freight-api";;
+              bus) echo "bus-api";;
+              commerce) echo "commerce-api";;
+              doctors) echo "doctors-api";;
+              automarket|carmarket) echo "automarket-api";;
+              utilities) echo "utilities-api";;
+              stays) echo "stays-api";;
+              chat) echo "chat-api";;
+              *) echo "";;
+            esac
+          }
+          # Stacks (presets)
+          stack_for() {
+            case "$1" in
+              core) echo "payments-api payments-worker payments-beat";;
+              food) echo "food-api";;
+              commerce) echo "commerce-api";;
+              taxi) echo "taxi-api taxi-reaper";;
+              doctors) echo "doctors-api";;
+              bus) echo "bus-api";;
+              freight) echo "freight-api";;
+              utilities) echo "utilities-api";;
+              automarket|carmarket) echo "automarket-api";;
+              chat) echo "chat-api";;
+              stays) echo "stays-api";;
+              jobs) echo "jobs-api";;
+              *) echo "";;
+            esac
+          }
+          if [ "$APP" = "all" ]; then
+            docker compose --env-file .env.prod -f docker-compose.yml down
+            docker compose --env-file .env.prod -f docker-compose.yml up -d
+            exit 0
+          fi
+          if [[ "$APP" == stack:* ]]; then
+            PRESET="${APP#stack:}"
+            SVCS=$(stack_for "$PRESET")
+          else
+            SVCS=$(svc_for "$APP")
+          fi
+          if [ -z "$SVCS" ]; then
+            echo "Unsupported app: $APP" >&2; exit 1;
+          fi
+          for s in $SVCS; do
+            echo "[chatops] restarting $s"
+            docker compose --env-file .env.prod -f docker-compose.yml rm -sf "$s" || true
+            docker compose --env-file .env.prod -f docker-compose.yml up -d "$s"
+          done
+
+      - name: Health check
+        if: success()
+        working-directory: ops/deploy/compose-traefik
+        env:
+          ACTION: ${{ steps.vars.outputs.action }}
+          APP: ${{ steps.vars.outputs.app }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" != "deploy-restart" ]; then exit 0; fi
+          svc_for() {
+            case "$1" in
+              payments-api) echo "http://payments-api:8080/health";;
+              payments-worker) echo "";;
+              payments-beat) echo "";;
+              taxi-api) echo "http://taxi-api:8081/health";;
+              automarket-api) echo "http://automarket-api:8086/health";;
+              bus-api) echo "http://bus-api:8082/health";;
+              chat-api) echo "http://chat-api:8091/health";;
+              commerce-api) echo "http://commerce-api:8083/health";;
+              doctors-api) echo "http://doctors-api:8089/health";;
+              food-api) echo "http://food-api:8090/health";;
+              freight-api) echo "http://freight-api:8085/health";;
+              jobs-api) echo "http://jobs-api:8087/health";;
+              stays-api) echo "http://stays-api:8088/health";;
+              utilities-api) echo "http://utilities-api:8084/health";;
+              *) echo "";;
+            esac
+          }
+          svcs_for_app() {
+            case "$1" in
+              payments) echo "payments-api payments-worker payments-beat";;
+              taxi) echo "taxi-api taxi-reaper";;
+              food) echo "food-api";;
+              freight) echo "freight-api";;
+              bus) echo "bus-api";;
+              commerce) echo "commerce-api";;
+              doctors) echo "doctors-api";;
+              automarket|carmarket) echo "automarket-api";;
+              utilities) echo "utilities-api";;
+              stays) echo "stays-api";;
+              chat) echo "chat-api";;
+              jobs) echo "jobs-api";;
+              *) echo "";;
+            esac
+          }
+          svcs_for_stack() {
+            case "$1" in
+              core) echo "payments-api payments-worker payments-beat";;
+              food) echo "food-api";;
+              commerce) echo "commerce-api";;
+              taxi) echo "taxi-api taxi-reaper";;
+              doctors) echo "doctors-api";;
+              bus) echo "bus-api";;
+              freight) echo "freight-api";;
+              utilities) echo "utilities-api";;
+              automarket|carmarket) echo "automarket-api";;
+              chat) echo "chat-api";;
+              stays) echo "stays-api";;
+              jobs) echo "jobs-api";;
+              *) echo "";;
+            esac
+          }
+          if [[ "$APP" == stack:* ]]; then
+            PRESET="${APP#stack:}"
+            SVCS=$(svcs_for_stack "$PRESET")
+          else
+            SVCS=$(svcs_for_app "$APP")
+          fi
+          for s in $SVCS; do
+            URL=$(svc_for "$s")
+            [ -z "$URL" ] && continue
+            echo "[health] $s -> $URL"
+            # Use a curl container on the internal network
+            docker run --rm --network internal curlimages/curl:8.10.1 -fsS -m 5 "$URL" >/dev/null \
+              || { echo "Health check failed for $s" >&2; exit 1; }
+          done
+
+      - name: Notify Slack (success)
+        if: ${{ steps.vars.outputs.resp_url != '' && success() }}
+        env:
+          RESP_URL: ${{ steps.vars.outputs.resp_url }}
+          APP: ${{ steps.vars.outputs.app }}
+          ACTOR: ${{ steps.vars.outputs.actor }}
+        run: |
+          MSG="✅ Restarted $APP. Requested by $ACTOR."
+          curl -s -X POST "$RESP_URL" -H 'Content-Type: application/json' \
+            --data-raw "{\"response_type\":\"ephemeral\",\"text\":$(jq -Rn --arg x "$MSG" '$x')}" >/dev/null
+
+      - name: Notify Slack (failure)
+        if: ${{ steps.vars.outputs.resp_url != '' && failure() }}
+        env:
+          RESP_URL: ${{ steps.vars.outputs.resp_url }}
+          APP: ${{ steps.vars.outputs.app }}
+          ACTOR: ${{ steps.vars.outputs.actor }}
+        run: |
+          MSG="❌ Failed to restart $APP. Requested by $ACTOR."
+          curl -s -X POST "$RESP_URL" -H 'Content-Type: application/json' \
+            --data-raw "{\"response_type\":\"ephemeral\",\"text\":$(jq -Rn --arg x "$MSG" '$x')}" >/dev/null || true

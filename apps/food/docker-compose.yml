@@ -16,6 +16,9 @@ services:
       dockerfile: apps/food/Dockerfile
     env_file:
       - .env
+    environment:
+      DB_URL: postgresql+psycopg2://postgres:postgres@host.docker.internal:5443/food
+      REDIS_URL: redis://host.docker.internal:6389/0
     ports:
       - "8090:8090"
     networks:

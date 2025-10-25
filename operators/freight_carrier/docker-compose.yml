@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: freight
+    ports:
+      - "5539:5432"
+    volumes:
+      - freight_carrier_db_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/freight_carrier/Dockerfile
+    env_file:
+      - ../../apps/freight/.env
+    environment:
+      PYTHONPATH: /app
+    ports:
+      - "8106:8106"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn operators.freight_carrier.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8106} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6496:6379"
+
+volumes:
+  freight_carrier_db_data:
+

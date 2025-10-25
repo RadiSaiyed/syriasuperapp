@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: stays
+    ports:
+      - "5541:5432"
+    volumes:
+      - stays_host_db_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/stays_host/Dockerfile
+    env_file:
+      - ../../apps/stays/.env
+    environment:
+      PYTHONPATH: /app
+    ports:
+      - "8101:8101"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn operators.stays_host.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8101} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6491:6379"
+
+volumes:
+  stays_host_db_data:
+

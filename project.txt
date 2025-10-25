@@ -1,0 +1,50 @@
+### Test users username/password: rider/rider, driver/driver, user1/user, user2/user
+
+### Overview
+
+
+# Maps & Geodata
+
+	- Map tiles/SDK: TomTom Maps (Web/SDK). Alternatively generic OSM tiles where legally permitted.
+  	- Geocoding/Reverse: TomTom Search API.
+  	- Places/Autocomplete: TomTom Search API; local fallbacks only if required by regulation.
+
+# Routing, ETA & Traffic
+
+  	- Routing & ETA: TomTom Routing API (traffic enabled).
+  	- Map‑matching: TomTom Snap‑to‑Roads or internal history if TomTom unavailable.
+  	- Traffic/ETA: TomTom Traffic; augment with historical travel‑time models.
+
+# Push, SMS, Voice & Chat
+
+  	- Push: APNs (iOS), FCM (Android, availability permitting), Huawei Push Kit (HMS devices).
+  	- SMS/OTP: Local SMS aggregator or direct SMPP to telcos; international providers (Twilio/Infobip/Vonage) often not usable.
+  	- Voice/call masking: Local SIP trunk + Asterisk/FreeSWITCH; international voice APIs often restricted.
+  	- In‑app chat: Self‑hosted Matrix/Rocket.Chat; managed (Sendbird/Stream) may be unavailable.
+
+ 
+# Realtime & Backend
+
+  	- Realtime location/dispatch: WebSockets (Socket.IO), MQTT (EMQX/Mosquitto) — self‑hosted.
+  	- Hosting: Own servers/VPS/datacenter; major clouds (AWS/GCP/Azure) frequently restricted.
+  	- Data & storage: PostgreSQL + PostGIS, Redis, MinIO (S3‑compatible), Nginx as reverse proxy/CDN.
+
+# Monitoring, Analytics & Quality
+
+  	- Crash reporting: Sentry (self‑hosted) or Crashlytics (availability permitting).
+  	- Analytics: Own dashboards/logs (no third‑party platforms).
+  	- Observability: Prometheus + Grafana; logs via ELK/OpenSearch.
+
+# Support & Operations
+
+  	- Helpdesk: Zammad/OTRS (self‑hosted). International ones (Zendesk/Freshdesk) may be restricted.
+  	- Email/notifications: Own SMTP or local provider. Messenger integrations only if legally/technically possible.
+	
+______________________________________________________________________________________________________________
+
+# Recommended minimal stack (sanctions‑friendly, self‑hosted)
+
+  	- Maps & Geocoding: TomTom SDKs/APIs.
+  	- Routing/ETA: TomTom (or simple historical ETA if needed).
+  	- Realtime: MQTT or Socket.IO.
+  	- Backend: PostgreSQL+PostGIS, Redis, MinIO, Sentry.

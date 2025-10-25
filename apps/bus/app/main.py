@@ -49,6 +49,17 @@ def create_app() -> FastAPI:
 
     if settings.AUTO_CREATE_SCHEMA:
         Base.metadata.create_all(bind=engine)
+        # best-effort lightweight alterations for dev: add new columns if missing
+        try:
+            with engine.connect() as conn:
+                conn.exec_driver_sql("ALTER TABLE IF EXISTS bus_promo_codes ADD COLUMN IF NOT EXISTS operator_id UUID NULL")
+                conn.exec_driver_sql("ALTER TABLE IF EXISTS trips ADD COLUMN IF NOT EXISTS vehicle_id UUID NULL")
+                conn.exec_driver_sql("ALTER TABLE IF EXISTS operator_members ADD COLUMN IF NOT EXISTS branch_id UUID NULL")
+                conn.exec_driver_sql("ALTER TABLE IF EXISTS bookings ADD COLUMN IF NOT EXISTS operator_branch_id UUID NULL")
+                # create branches table if not exists (idempotent via create_all)
+                conn.exec_driver_sql("CREATE TABLE IF NOT EXISTS bus_operator_webhooks (id UUID PRIMARY KEY, operator_id UUID NOT NULL, url VARCHAR(512) NOT NULL, secret VARCHAR(256) NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL)")
+        except Exception:
+            pass
 
     @app.get("/health")
     def health():

@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5550:5432"
+    volumes:
+      - payments_merchant_db_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "yes"]
+    ports:
+      - "6499:6379"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/payments_merchant_api/Dockerfile
+    env_file:
+      - ../../apps/payments/.env
+    environment:
+      PYTHONPATH: /app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8109:8109"
+    command: ["sh", "-lc", "alembic upgrade head && uvicorn operators.payments_merchant_api.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8109} --reload"]
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: operators/payments_merchant_api/Dockerfile
+    env_file:
+      - ../../apps/payments/.env
+    environment:
+      PYTHONPATH: /app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-lc", "alembic upgrade head"]
+    profiles: ["migrate"]
+
+volumes:
+  payments_merchant_db_data:

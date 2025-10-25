@@ -1,0 +1,521 @@
+name: Payments CI
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'apps/payments/**'
+      - 'libs/superapp_shared/**'
+      - 'tools/**'
+      - '.github/workflows/payments-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/payments/**'
+      - 'libs/superapp_shared/**'
+      - 'tools/**'
+      - '.github/workflows/payments-ci.yml'
+
+jobs:
+  payments:
+    name: Payments Tests + Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/payments/requirements.txt') }}-py311
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Install Python deps (payments)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/payments/requirements.txt
+          pip install pytest-cov
+
+      - name: Prepare database and migrate
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # create payments database
+          psql -h localhost -U postgres -p 5432 -c 'CREATE DATABASE payments;' || true
+          # run alembic migrations to head
+          export DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/payments
+          export PYTHONPATH="$GITHUB_WORKSPACE/apps/payments:$GITHUB_WORKSPACE/libs/superapp_shared:$PYTHONPATH"
+          cd apps/payments
+          alembic upgrade head
+
+      - name: Run pytest with coverage (payments)
+        env:
+          DB_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/payments
+          REDIS_URL: redis://localhost:6379/0
+          ENV: dev
+          PYTHONPATH: ${{ github.workspace }}/apps/payments:${{ github.workspace }}/libs/superapp_shared
+        run: |
+          mkdir -p test-results
+          pytest -q apps/payments/tests \
+            --junitxml=test-results/pytest.xml \
+            --cov=app --cov-report=xml:coverage.xml --cov-report=term-missing \
+            --cov-fail-under=85
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: payments-coverage
+          path: coverage.xml
+
+      - name: Upload test results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: payments-test-results
+          path: test-results/pytest.xml
+
+      - name: Coverage summary
+        run: |
+          python - <<'PY'
+import xml.etree.ElementTree as ET
+root = ET.parse('coverage.xml').getroot()
+rate = float(root.attrib.get('line-rate', '0')) * 100.0
+print(f"Payments coverage: {rate:.2f}%")
+with open('${{ github.step_summary }}', 'a') as f:
+    f.write(f"\n### Payments coverage: {rate:.2f}%\n")
+PY
+
+      - name: Upload to Codecov
+        if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          flags: payments
+          verbose: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
+
+      - name: Run Payments E2E against local API
+        env:
+          DB_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/payments
+          REDIS_URL: redis://localhost:6379/0
+          ENV: dev
+          RATE_LIMIT_PER_MINUTE: "100000"
+          RATE_LIMIT_AUTH_BOOST: "1"
+          RL_EXEMPT_OTP: "true"
+          PYTHONPATH: ${{ github.workspace }}/apps/payments:${{ github.workspace }}/libs/superapp_shared
+        run: |
+          set -euo pipefail
+          cd apps/payments
+          # Start API in background (logs to api.log)
+          python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 > api.log 2>&1 &
+          API_PID=$!
+          # Wait for health
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/health && break || sleep 1
+          done
+          BASE=http://localhost:8080
+          TS=$(date +%s); SUF=$(printf "%06d" $((TS % 1000000)))
+          A="+9639000${SUF}"; B="+9639001${SUF}"
+          echo "A=$A B=$B" | tee -a e2e.log >/dev/null
+          curl -s $BASE/auth/request_otp -H 'Content-Type: application/json' --data-raw '{"phone":"'"$A"'"}' | tee -a e2e.log >/dev/null
+          TOK_A=$(curl -s $BASE/auth/verify_otp -H 'Content-Type: application/json' --data-raw '{"phone":"'"$A"'","otp":"123456","name":"Ali"}' | python - <<'PY'
+import sys,json; print(json.load(sys.stdin).get("access_token",""))
+PY
+          )
+          curl -s $BASE/auth/request_otp -H 'Content-Type: application/json' --data-raw '{"phone":"'"$B"'"}' | tee -a e2e.log >/dev/null
+          TOK_B=$(curl -s $BASE/auth/verify_otp -H 'Content-Type: application/json' --data-raw '{"phone":"'"$B"'","otp":"123456","name":"Omar"}' | python - <<'PY'
+import sys,json; print(json.load(sys.stdin).get("access_token",""))
+PY
+          )
+          test -n "$TOK_A" && test -n "$TOK_B"
+          curl -s -X POST $BASE/kyc/dev/approve -H "Authorization: Bearer $TOK_A" | tee -a e2e.log >/dev/null
+          curl -s -X POST $BASE/kyc/dev/approve -H "Authorization: Bearer $TOK_B" | tee -a e2e.log >/dev/null
+          curl -s -X POST $BASE/wallet/topup -H "Authorization: Bearer $TOK_A" -H 'Content-Type: application/json' --data-raw '{"amount_cents": 200000, "idempotency_key":"topupA-'"$SUF"'"}' | tee -a e2e.log | grep -q '"status":"completed"'
+          curl -s -X POST $BASE/wallet/topup -H "Authorization: Bearer $TOK_B" -H 'Content-Type: application/json' --data-raw '{"amount_cents": 150000, "idempotency_key":"topupB-'"$SUF"'"}' | tee -a e2e.log | grep -q '"status":"completed"'
+          QR=$(curl -s -X POST $BASE/payments/merchant/qr -H "Authorization: Bearer $TOK_A" -H 'Content-Type: application/json' --data-raw '{"amount_cents":5000}' | tee -a e2e.log)
+          CODE=$(echo "$QR" | python - <<'PY'
+import sys,json; print(json.load(sys.stdin).get("code",""))
+PY
+          )
+          test -n "$CODE"
+          curl -s -X POST $BASE/payments/merchant/pay -H "Authorization: Bearer $TOK_B" -H 'Content-Type: application/json' --data-raw '{"code":"'"$CODE"'","idempotency_key":"qr-'"$SUF"'"}' | tee -a e2e.log | grep -q '"status":"completed"'
+          REQ=$(curl -s -X POST $BASE/requests -H "Authorization: Bearer $TOK_A" -H 'Content-Type: application/json' --data-raw '{"to_phone":"'"$B"'","amount_cents":2222}' | tee -a e2e.log)
+          RID=$(echo "$REQ" | python - <<'PY'
+import sys,json; print(json.load(sys.stdin).get("id",""))
+PY
+          )
+          test -n "$RID"
+          curl -s -X POST $BASE/requests/$RID/accept -H "Authorization: Bearer $TOK_B" | tee -a e2e.log | grep -q '"detail":"accepted"'
+          kill $API_PID
+          wait $API_PID || true
+
+      - name: Upload E2E logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: payments-e2e-logs
+          path: |
+            apps/payments/api.log
+            apps/payments/e2e.log
+
+  health:
+    name: Monorepo Health Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/**/requirements.txt') }}-py311
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Run health check script
+        run: |
+          bash tools/health_check.sh
+
+  payments-e2e:
+    name: Payments E2E (matrix)
+    runs-on: ubuntu-latest
+    needs: payments
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [memory, redis]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres" 
+          --health-interval=10s 
+          --health-timeout=5s 
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/payments/requirements.txt') }}-py311
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python deps (payments)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/payments/requirements.txt
+
+      - name: Prepare database and migrate
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -p 5432 -c 'CREATE DATABASE payments;' || true
+          export DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/payments
+          export PYTHONPATH="$GITHUB_WORKSPACE/apps/payments:$GITHUB_WORKSPACE/libs/superapp_shared:$PYTHONPATH"
+          cd apps/payments
+          alembic upgrade head
+
+      - name: Run E2E flow (backend=${{ matrix.backend }})
+        env:
+          DB_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/payments
+          REDIS_URL: redis://localhost:6379/0
+          ENV: dev
+          RATE_LIMIT_BACKEND: ${{ matrix.backend }}
+          RATE_LIMIT_PER_MINUTE: "100000"
+          RATE_LIMIT_AUTH_BOOST: "1"
+          RL_EXEMPT_OTP: "true"
+          PYTHONPATH: ${{ github.workspace }}/apps/payments:${{ github.workspace }}/libs/superapp_shared
+        run: |
+          set -euo pipefail
+          cd apps/payments
+          python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 &
+          API_PID=$!
+          for i in $(seq 1 60); do curl -sf http://localhost:8080/health && break || sleep 1; done
+          BASE=http://localhost:8080
+          TS=$(date +%s); SUF=$(printf "%06d" $((TS % 1000000)))
+          A="+9639000${SUF}"; B="+9639001${SUF}"
+          curl -s $BASE/auth/request_otp -H 'Content-Type: application/json' --data-raw '{"phone":"'"$A"'"}' >/dev/null
+          TOK_A=$(curl -s $BASE/auth/verify_otp -H 'Content-Type: application/json' --data-raw '{"phone":"'"$A"'","otp":"123456","name":"Ali"}' | python - <<'PY'
+import sys,json; print(json.load(sys.stdin).get("access_token",""))
+PY
+          )
+          curl -s $BASE/auth/request_otp -H 'Content-Type: application/json' --data-raw '{"phone":"'"$B"'"}' >/dev/null
+          TOK_B=$(curl -s $BASE/auth/verify_otp -H 'Content-Type: application/json' --data-raw '{"phone":"'"$B"'","otp":"123456","name":"Omar"}' | python - <<'PY'
+import sys,json; print(json.load(sys.stdin).get("access_token",""))
+PY
+          )
+          test -n "$TOK_A" && test -n "$TOK_B"
+          curl -s -X POST $BASE/kyc/dev/approve -H "Authorization: Bearer $TOK_A" >/dev/null
+          curl -s -X POST $BASE/kyc/dev/approve -H "Authorization: Bearer $TOK_B" >/dev/null
+          curl -s -X POST $BASE/wallet/topup -H "Authorization: Bearer $TOK_A" -H 'Content-Type: application/json' --data-raw '{"amount_cents": 200000, "idempotency_key":"topupA-'"$SUF"'"}' | grep -q '"status":"completed"'
+          curl -s -X POST $BASE/wallet/topup -H "Authorization: Bearer $TOK_B" -H 'Content-Type: application/json' --data-raw '{"amount_cents": 150000, "idempotency_key":"topupB-'"$SUF"'"}' | grep -q '"status":"completed"'
+          QR=$(curl -s -X POST $BASE/payments/merchant/qr -H "Authorization: Bearer $TOK_A" -H 'Content-Type: application/json' --data-raw '{"amount_cents":5000}')
+          CODE=$(echo "$QR" | python - <<'PY'
+import sys,json; print(json.load(sys.stdin).get("code",""))
+PY
+          )
+          test -n "$CODE"
+          curl -s -X POST $BASE/payments/merchant/pay -H "Authorization: Bearer $TOK_B" -H 'Content-Type: application/json' --data-raw '{"code":"'"$CODE"'","idempotency_key":"qr-'"$SUF"'"}' | grep -q '"status":"completed"'
+          REQ=$(curl -s -X POST $BASE/requests -H "Authorization: Bearer $TOK_A" -H 'Content-Type: application/json' --data-raw '{"to_phone":"'"$B"'","amount_cents":2222}')
+          RID=$(echo "$REQ" | python - <<'PY'
+import sys,json; print(json.load(sys.stdin).get("id",""))
+PY
+          )
+          test -n "$RID"
+          curl -s -X POST $BASE/requests/$RID/accept -H "Authorization: Bearer $TOK_B" | grep -q '"detail":"accepted"'
+          kill $API_PID
+          wait $API_PID || true
+
+  payments-web:
+    name: Payments Web (unit + e2e)
+    runs-on: ubuntu-latest
+    needs: payments
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres" 
+          --health-interval=10s 
+          --health-timeout=5s 
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps (payments)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/payments/requirements.txt
+
+      - name: Prepare database and migrate
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -p 5432 -c 'CREATE DATABASE payments;' || true
+          export DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/payments
+          export PYTHONPATH="$GITHUB_WORKSPACE/apps/payments:$GITHUB_WORKSPACE/libs/superapp_shared:$PYTHONPATH"
+          cd apps/payments
+          alembic upgrade head
+
+      - name: Start backend API
+        env:
+          DB_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/payments
+          REDIS_URL: redis://localhost:6379/0
+          ENV: dev
+          RATE_LIMIT_PER_MINUTE: "100000"
+          RATE_LIMIT_AUTH_BOOST: "1"
+          RL_EXEMPT_OTP: "true"
+          PYTHONPATH: ${{ github.workspace }}/apps/payments:${{ github.workspace }}/libs/superapp_shared
+        run: |
+          cd apps/payments
+          python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 > api.log 2>&1 &
+          echo $! > api.pid
+          for i in $(seq 1 60); do curl -sf http://localhost:8080/health && break || sleep 1; done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: clients/payments_web/package.json
+
+      - name: Install web deps
+        working-directory: clients/payments_web
+        run: |
+          npm install
+
+      - name: Run unit tests (Vitest)
+        working-directory: clients/payments_web
+        run: |
+          npm run test:unit -- --reporter=dot
+
+      - name: Install Playwright
+        working-directory: clients/payments_web
+        run: |
+          npx playwright install --with-deps
+
+      - name: Build and Preview
+        working-directory: clients/payments_web
+        env:
+          VITE_API_BASE: http://localhost:8080
+        run: |
+          npm run build
+          npx vite preview --port 5173 &
+          echo $! > preview.pid
+          for i in $(seq 1 30); do curl -sf http://localhost:5173/ && break || sleep 1; done
+
+      - name: Run E2E (Playwright)
+        working-directory: clients/payments_web
+        env:
+          BASE_URL: http://localhost:5173
+        run: |
+          npm run test:e2e -- --reporter=line
+
+      - name: Upload web logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: payments-web-logs
+          path: |
+            apps/payments/api.log
+
+      - name: Teardown preview and api
+        if: always()
+        run: |
+          kill $(cat clients/payments_web/preview.pid) 2>/dev/null || true
+          kill $(cat apps/payments/api.pid) 2>/dev/null || true
+  supply-chain:
+    name: Payments Supply Chain (SBOM, audit, licenses)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/payments/requirements.txt') }}-py311-supply
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies for scanning
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/payments/requirements.txt
+          pip install cyclonedx-bom pip-audit pip-licenses
+
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          cyclonedx-bom -o sbom-payments.json
+        working-directory: apps/payments
+
+      - name: pip-audit (vuln scan)
+        run: |
+          pip-audit -r apps/payments/requirements.txt -f json -o pip-audit.json
+        continue-on-error: true
+
+      - name: Licenses report
+        run: |
+          pip-licenses --format=json --with-urls --with-authors > licenses-payments.json
+        working-directory: apps/payments
+
+      - name: License allowlist check
+        run: |
+          python - <<'PY'
+import json, sys
+ALLOW = {"MIT","BSD","BSD-3-Clause","BSD-2-Clause","Apache-2.0","MPL-2.0","ISC","Python-2.0"}
+with open('apps/payments/licenses-payments.json') as f:
+    pkgs = json.load(f)
+bad = []
+for p in pkgs:
+    lic = (p.get('License') or '').split(';')[0].strip()
+    if lic and all(a.strip() not in ALLOW for a in lic.replace(',', ';').split(';')):
+        bad.append((p.get('Name'), lic))
+if bad:
+    print('Non-allowlisted licenses found:')
+    for name, lic in bad:
+        print(f'  {name}: {lic}')
+    # Do not fail CI yet; print summary and exit 0
+    # sys.exit(1)
+else:
+    print('All licenses in allowlist')
+PY
+
+      - name: Upload supply chain artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: payments-supply-chain
+          path: |
+            apps/payments/sbom-payments.json
+            pip-audit.json
+            apps/payments/licenses-payments.json

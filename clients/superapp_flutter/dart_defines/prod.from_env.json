@@ -1,0 +1,5 @@
+{
+  "TAXI_BASE_URL": "https://taxi.example.com",
+  "PAYMENTS_BASE_URL": "https://payments.example.com",
+  "CHAT_BASE_URL": "https://chat.example.com"
+}

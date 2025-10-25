@@ -1,0 +1,609 @@
+x-common-env: &common-env
+  ENV: prod
+  RATE_LIMIT_BACKEND: redis
+
+networks:
+  web:
+    name: web
+  internal:
+    name: internal
+
+volumes:
+  traefik_letsencrypt:
+  payments_db:
+  taxi_db:
+  automarket_db:
+  bus_db:
+  chat_db:
+  commerce_db:
+  doctors_db:
+  food_db:
+  freight_db:
+  jobs_db:
+  stays_db:
+  utilities_db:
+
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Redirect all HTTP (web) traffic to HTTPS (websecure)
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    labels:
+      - "traefik.enable=true"
+      # Define a reusable HSTS middleware
+      - "traefik.http.middlewares.secure-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.secure-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.secure-headers.headers.stsPreload=true"
+      - "traefik.http.middlewares.secure-headers.headers.forceSTSHeader=true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    networks:
+      - web
+    restart: unless-stopped
+
+  # Payments stack
+  payments-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: payments
+    volumes:
+      - payments_db:/var/lib/postgresql/data
+    networks: [internal]
+    restart: unless-stopped
+
+  payments-redis:
+    image: redis:7-alpine
+    networks: [internal]
+    restart: unless-stopped
+
+  payments-api:
+    image: ${REGISTRY}/${ORG}/syria-payments:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8080
+      DB_URL: postgresql+psycopg2://postgres:postgres@payments-db:5432/payments
+      JWT_SECRET: ${PAYMENTS_JWT_SECRET}
+      ADMIN_TOKEN_SHA256: ${PAYMENTS_ADMIN_TOKEN_SHA256}
+      ADMIN_TOKEN: ${PAYMENTS_ADMIN_TOKEN}
+      ALLOWED_ORIGINS: ${PAYMENTS_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      INTERNAL_API_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      INTERNAL_REQUIRE_HMAC: "true"
+      REDIS_URL: redis://payments-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl
+      UVICORN_EXTRA_ARGS: --proxy-headers --forwarded-allow-ips='*'
+    depends_on:
+      - payments-db
+      - payments-redis
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.payments.rule=Host(`payments.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.payments.entrypoints=websecure"
+      - "traefik.http.routers.payments.tls.certresolver=letsencrypt"
+      - "traefik.http.services.payments.loadbalancer.server.port=8080"
+      - "traefik.http.routers.payments.middlewares=secure-headers@docker"
+    networks:
+      - web
+      - internal
+    restart: unless-stopped
+
+  payments-worker:
+    image: ${REGISTRY}/${ORG}/syria-payments:${TAG}
+    environment:
+      <<: *common-env
+      DB_URL: postgresql+psycopg2://postgres:postgres@payments-db:5432/payments
+      REDIS_URL: redis://payments-redis:6379/0
+      CELERY_BROKER_URL: redis://payments-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://payments-redis:6379/0
+      WEBHOOK_PROCESS_INTERVAL_SECS: ${WEBHOOK_PROCESS_INTERVAL_SECS:-10}
+      JWT_SECRET: ${PAYMENTS_JWT_SECRET}
+      ADMIN_TOKEN_SHA256: ${PAYMENTS_ADMIN_TOKEN_SHA256}
+      ALLOWED_ORIGINS: ${PAYMENTS_ALLOWED_ORIGINS}
+      INTERNAL_API_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      OTP_MODE: redis
+    depends_on:
+      - payments-db
+      - payments-redis
+    entrypoint: ["sh", "-lc", "celery -A app.celery_app:celery_app worker --loglevel=INFO -Q payments"]
+    networks:
+      - internal
+    restart: unless-stopped
+
+  payments-beat:
+    image: ${REGISTRY}/${ORG}/syria-payments:${TAG}
+    environment:
+      <<: *common-env
+      DB_URL: postgresql+psycopg2://postgres:postgres@payments-db:5432/payments
+      REDIS_URL: redis://payments-redis:6379/0
+      CELERY_BROKER_URL: redis://payments-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://payments-redis:6379/0
+      WEBHOOK_PROCESS_INTERVAL_SECS: ${WEBHOOK_PROCESS_INTERVAL_SECS:-10}
+      JWT_SECRET: ${PAYMENTS_JWT_SECRET}
+      ADMIN_TOKEN_SHA256: ${PAYMENTS_ADMIN_TOKEN_SHA256}
+      ALLOWED_ORIGINS: ${PAYMENTS_ALLOWED_ORIGINS}
+      INTERNAL_API_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      OTP_MODE: redis
+    depends_on:
+      - payments-redis
+    entrypoint: ["sh", "-lc", "celery -A app.celery_app:celery_app beat --loglevel=INFO"]
+    networks:
+      - internal
+    restart: unless-stopped
+
+  # Taxi stack
+  taxi-db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: taxi
+    volumes:
+      - taxi_db:/var/lib/postgresql/data
+    networks: [internal]
+    restart: unless-stopped
+
+  taxi-redis:
+    image: redis:7-alpine
+    networks: [internal]
+    restart: unless-stopped
+
+  taxi-api:
+    image: ${REGISTRY}/${ORG}/syria-taxi:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8081
+      DB_URL: postgresql+psycopg2://postgres:postgres@taxi-db:5432/taxi
+      JWT_SECRET: ${TAXI_JWT_SECRET}
+      ALT_JWT_SECRETS: ${PAYMENTS_JWT_SECRET}
+      ALLOWED_ORIGINS: ${TAXI_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      TAXI_ESCROW_WALLET_PHONE: ${TAXI_ESCROW_WALLET_PHONE}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY_TAXI}
+      REDIS_URL: redis://taxi-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_taxi
+      UVICORN_EXTRA_ARGS: --proxy-headers --forwarded-allow-ips='*'
+      # Optional: connect to Payments via internal DNS; set secret if used
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      # Admin token (hashed) for protected ops endpoints (e.g., /rides/reap_timeouts)
+      ADMIN_TOKEN_SHA256: ${TAXI_ADMIN_TOKEN_SHA256}
+    depends_on:
+      - taxi-db
+      - taxi-redis
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.taxi.rule=Host(`taxi.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.taxi.entrypoints=websecure"
+      - "traefik.http.routers.taxi.tls.certresolver=letsencrypt"
+      - "traefik.http.services.taxi.loadbalancer.server.port=8081"
+      - "traefik.http.routers.taxi.middlewares=secure-headers@docker"
+    networks:
+      - web
+      - internal
+    restart: unless-stopped
+
+  # Taxi Timeout Reaper (cron-like sidecar)
+  taxi-reaper:
+    image: curlimages/curl:8.10.1
+    environment:
+      TAXI_API_BASE: http://taxi-api:8081
+      TAXI_ADMIN_TOKEN: ${TAXI_ADMIN_TOKEN}
+      REAPER_INTERVAL_SECS: ${TAXI_REAPER_INTERVAL_SECS:-60}
+      REAPER_TIMEOUT_SECS: ${TAXI_REAPER_TIMEOUT_SECS:-120}
+      REAPER_LIMIT: ${TAXI_REAPER_LIMIT:-200}
+      REAPER_RELAX_WALLET: ${TAXI_REAPER_RELAX_WALLET:-false}
+    command:
+      - /bin/sh
+      - -lc
+      - >-
+        while true; do
+          echo "[reaper] tick $(date -u +%FT%TZ)";
+          curl -fsS -X POST "$${TAXI_API_BASE}/rides/reap_timeouts?accept_timeout_secs=$${REAPER_TIMEOUT_SECS}&limit=$${REAPER_LIMIT}&relax_wallet=$${REAPER_RELAX_WALLET}" \
+            -H "X-Admin-Token: $${TAXI_ADMIN_TOKEN}" || true;
+          curl -fsS -X POST "$${TAXI_API_BASE}/rides/reap_start_timeouts?start_timeout_secs=$${REAPER_TIMEOUT_SECS}&limit=$${REAPER_LIMIT}&relax_wallet=$${REAPER_RELAX_WALLET}" \
+            -H "X-Admin-Token: $${TAXI_ADMIN_TOKEN}" || true;
+          sleep $${REAPER_INTERVAL_SECS};
+        done
+    depends_on:
+      - taxi-api
+    networks:
+      - internal
+    restart: unless-stopped
+
+  # Automarket
+  automarket-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ automarket_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  automarket-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  automarket-api:
+    image: ${REGISTRY}/${ORG}/syria-automarket:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8086
+      DB_URL: postgresql+psycopg2://postgres:postgres@automarket-db:5432/automarket
+      JWT_SECRET: ${AUTOMARKET_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://automarket-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_automarket
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      FEE_WALLET_PHONE: ${FEE_WALLET_PHONE}
+    depends_on: [ automarket-db, automarket-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.automarket.rule=Host(`automarket.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.automarket.entrypoints=websecure"
+      - "traefik.http.routers.automarket.tls.certresolver=letsencrypt"
+      - "traefik.http.services.automarket.loadbalancer.server.port=8086"
+      # Additional router alias for carmarket
+      - "traefik.http.routers.carmarket.rule=Host(`carmarket.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.carmarket.entrypoints=websecure"
+      - "traefik.http.routers.carmarket.tls.certresolver=letsencrypt"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Bus
+  bus-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ bus_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  bus-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  bus-api:
+    image: ${REGISTRY}/${ORG}/syria-bus:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8082
+      DB_URL: postgresql+psycopg2://postgres:postgres@bus-db:5432/bus
+      JWT_SECRET: ${BUS_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://bus-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_bus
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      FEE_WALLET_PHONE: ${FEE_WALLET_PHONE}
+    depends_on: [ bus-db, bus-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bus.rule=Host(`bus.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.bus.entrypoints=websecure"
+      - "traefik.http.routers.bus.tls.certresolver=letsencrypt"
+      - "traefik.http.services.bus.loadbalancer.server.port=8082"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Chat
+  chat-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ chat_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  chat-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  chat-api:
+    image: ${REGISTRY}/${ORG}/syria-chat:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8091
+      DB_URL: postgresql+psycopg2://postgres:postgres@chat-db:5432/chat
+      JWT_SECRET: ${CHAT_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      REDIS_URL: redis://chat-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_chat
+      # Harden OTP for production (no dev codes)
+      OTP_MODE: redis
+      # Public base for links/clients
+      CHAT_PUBLIC_BASE_URL: https://chat.${BASE_DOMAIN}
+    depends_on: [ chat-db, chat-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.chat.rule=Host(`chat.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.chat.entrypoints=websecure"
+      - "traefik.http.routers.chat.tls.certresolver=letsencrypt"
+      - "traefik.http.services.chat.loadbalancer.server.port=8091"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Commerce
+  commerce-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ commerce_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  commerce-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  commerce-api:
+    image: ${REGISTRY}/${ORG}/syria-commerce:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8083
+      DB_URL: postgresql+psycopg2://postgres:postgres@commerce-db:5432/commerce
+      JWT_SECRET: ${COMMERCE_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://commerce-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_commerce
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      FEE_WALLET_PHONE: ${FEE_WALLET_PHONE}
+    depends_on: [ commerce-db, commerce-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.commerce.rule=Host(`commerce.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.commerce.entrypoints=websecure"
+      - "traefik.http.routers.commerce.tls.certresolver=letsencrypt"
+      - "traefik.http.services.commerce.loadbalancer.server.port=8083"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Doctors
+  doctors-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ doctors_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  doctors-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  doctors-api:
+    image: ${REGISTRY}/${ORG}/syria-doctors:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8089
+      DB_URL: postgresql+psycopg2://postgres:postgres@doctors-db:5432/doctors
+      JWT_SECRET: ${DOCTORS_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://doctors-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_doctors
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      FEE_WALLET_PHONE: ${FEE_WALLET_PHONE}
+    depends_on: [ doctors-db, doctors-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.doctors.rule=Host(`doctors.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.doctors.entrypoints=websecure"
+      - "traefik.http.routers.doctors.tls.certresolver=letsencrypt"
+      - "traefik.http.services.doctors.loadbalancer.server.port=8089"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Food
+  food-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ food_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  food-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  food-api:
+    image: ${REGISTRY}/${ORG}/syria-food:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8090
+      DB_URL: postgresql+psycopg2://postgres:postgres@food-db:5432/food
+      JWT_SECRET: ${FOOD_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://food-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_food
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      FEE_WALLET_PHONE: ${FEE_WALLET_PHONE}
+    depends_on: [ food-db, food-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.food.rule=Host(`food.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.food.entrypoints=websecure"
+      - "traefik.http.routers.food.tls.certresolver=letsencrypt"
+      - "traefik.http.services.food.loadbalancer.server.port=8090"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Freight
+  freight-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ freight_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  freight-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  freight-api:
+    image: ${REGISTRY}/${ORG}/syria-freight:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8085
+      DB_URL: postgresql+psycopg2://postgres:postgres@freight-db:5432/freight
+      JWT_SECRET: ${FREIGHT_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://freight-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_freight
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      FEE_WALLET_PHONE: ${FEE_WALLET_PHONE}
+    depends_on: [ freight-db, freight-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.freight.rule=Host(`freight.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.freight.entrypoints=websecure"
+      - "traefik.http.routers.freight.tls.certresolver=letsencrypt"
+      - "traefik.http.services.freight.loadbalancer.server.port=8085"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Jobs
+  jobs-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ jobs_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  jobs-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  jobs-api:
+    image: ${REGISTRY}/${ORG}/syria-jobs:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8087
+      DB_URL: postgresql+psycopg2://postgres:postgres@jobs-db:5432/jobs
+      JWT_SECRET: ${JOBS_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://jobs-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_jobs
+    depends_on: [ jobs-db, jobs-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jobs.rule=Host(`jobs.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.jobs.entrypoints=websecure"
+      - "traefik.http.routers.jobs.tls.certresolver=letsencrypt"
+      - "traefik.http.services.jobs.loadbalancer.server.port=8087"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Stays
+  stays-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ stays_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  stays-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  stays-api:
+    image: ${REGISTRY}/${ORG}/syria-stays:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8088
+      DB_URL: postgresql+psycopg2://postgres:postgres@stays-db:5432/stays
+      JWT_SECRET: ${STAYS_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://stays-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_stays
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      FEE_WALLET_PHONE: ${FEE_WALLET_PHONE}
+    depends_on: [ stays-db, stays-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.stays.rule=Host(`stays.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.stays.entrypoints=websecure"
+      - "traefik.http.routers.stays.tls.certresolver=letsencrypt"
+      - "traefik.http.services.stays.loadbalancer.server.port=8088"
+    networks: [ web, internal ]
+    restart: unless-stopped
+
+  # Utilities
+  utilities-db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres }
+    volumes: [ utilities_db:/var/lib/postgresql/data ]
+    networks: [ internal ]
+    restart: unless-stopped
+
+  utilities-redis:
+    image: redis:7-alpine
+    networks: [ internal ]
+    restart: unless-stopped
+
+  utilities-api:
+    image: ${REGISTRY}/${ORG}/syria-utilities:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8084
+      DB_URL: postgresql+psycopg2://postgres:postgres@utilities-db:5432/utilities
+      JWT_SECRET: ${UTILITIES_JWT_SECRET}
+      ALLOWED_ORIGINS: ${COMMON_ALLOWED_ORIGINS}
+      OTP_MODE: redis
+      REDIS_URL: redis://utilities-redis:6379/0
+      RATE_LIMIT_REDIS_PREFIX: rl_util
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      PAYMENTS_INTERNAL_SECRET: ${PAYMENTS_INTERNAL_SECRET}
+      FEE_WALLET_PHONE: ${FEE_WALLET_PHONE}
+    depends_on: [ utilities-db, utilities-redis ]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.utilities.rule=Host(`utilities.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.utilities.entrypoints=websecure"
+      - "traefik.http.routers.utilities.tls.certresolver=letsencrypt"
+      - "traefik.http.services.utilities.loadbalancer.server.port=8084"
+    networks: [ web, internal ]
+    restart: unless-stopped

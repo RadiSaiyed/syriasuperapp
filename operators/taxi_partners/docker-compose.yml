@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: taxi
+    ports:
+      - "5535:5432"
+    volumes:
+      - taxi_partners_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/taxi_partners/Dockerfile
+    env_file:
+      - ../../apps/taxi/.env
+    environment:
+      PYTHONPATH: /app
+    ports:
+      - "8108:8108"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: ["sh", "-c", "alembic upgrade head && uvicorn operators.taxi_partners.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8108} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6498:6379"
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: operators/taxi_partners/Dockerfile
+    env_file:
+      - ../../apps/taxi/.env
+    environment:
+      PYTHONPATH: /app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head"]
+    profiles: ["migrate"]
+
+volumes:
+  taxi_partners_db_data:

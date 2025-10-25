@@ -1,0 +1,5 @@
+{
+  "SUPERAPP_BASE_HOST": "http://localhost",
+  "TAXI_BASE_URL": "http://localhost:8081",
+  "PAYMENTS_BASE_URL": "http://localhost:8080"
+}

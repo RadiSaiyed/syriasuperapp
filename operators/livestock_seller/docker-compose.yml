@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: livestock
+    ports:
+      - "5546:5432"
+    volumes:
+      - livestock_seller_db_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/livestock_seller/Dockerfile
+    environment:
+      ENV: dev
+      APP_PORT: 8104
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/livestock
+      JWT_SECRET: dev_secret_livestock
+      OTP_MODE: dev
+      PYTHONPATH: /app
+    ports:
+      - "8104:8104"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn operators.livestock_seller.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8104} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6494:6379"
+
+volumes:
+  livestock_seller_db_data:
+

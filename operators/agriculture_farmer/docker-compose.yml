@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agriculture
+    ports:
+      - "5545:5432"
+    volumes:
+      - agriculture_farmer_db_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: operators/agriculture_farmer/Dockerfile
+    environment:
+      ENV: dev
+      APP_PORT: 8100
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/agriculture
+      JWT_SECRET: dev_secret_agriculture
+      OTP_MODE: dev
+      PYTHONPATH: /app
+    ports:
+      - "8100:8100"
+    depends_on:
+      - db
+      - redis
+    command: ["sh", "-c", "uvicorn operators.agriculture_farmer.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8100} --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6490:6379"
+
+volumes:
+  agriculture_farmer_db_data:
+

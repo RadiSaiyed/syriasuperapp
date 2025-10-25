@@ -53,7 +53,7 @@ Service‑Specific Notes
   - Good: Alembic migration on start via `entrypoint.sh:1`, Celery worker/beat in compose, prod guards in `app/config.py:87`.
   - Set `INTERNAL_REQUIRE_HMAC=true` and rotate all secrets. Set `STARTING_CREDIT_CENTS=0` for prod unless launching promo.
 - Taxi (`apps/taxi`)
-  - Good: robust prod checks (`app/config.py:...`), requires Redis rate limit and JWKS or strong secrets, TomTom API key required.
+  - Good: robust prod checks (`app/config.py:...`), requires Redis rate limit and JWKS or strong secrets, Google Maps API key required.
   - Ensure reaper sidecar configured with admin token in deploy bundle.
 - Others (Commerce, Food, Doctors, Stays, etc.)
   - Add Alembic migrations or provision schema out‑of‑band before disabling `AUTO_CREATE_SCHEMA` in prod.

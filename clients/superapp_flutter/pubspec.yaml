@@ -1,0 +1,51 @@
+name: superapp_flutter
+description: Unified Super‑App container for all verticals
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  shared_preferences: ^2.2.3
+  url_launcher: ^6.3.1
+  web_socket_channel: ^2.4.0
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  cached_network_image: ^3.4.1
+  geolocator: ^11.1.0
+  intl: ^0.20.2
+  shared_ui:
+    path: ../shared_ui
+  taxi_flutter:
+    path: ../taxi_flutter
+  chat_flutter:
+    path: ../chat_flutter
+  share_plus: ^10.1.4
+  qr_flutter: ^4.1.0
+  path_provider: ^2.1.4
+  printing: ^5.14.2
+  pdf: ^3.11.3
+  flutter_contacts: ^1.1.9+2
+  local_auth: ^2.3.0
+  google_fonts: ^6.2.1
+  flutter_dotenv: ^5.2.1
+  mobile_scanner: ^7.1.2
+
+dependency_overrides:
+  js: ^0.7.2
+
+  crypto: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env

@@ -124,11 +124,36 @@ def _route_info(pickup_lat: float, pickup_lon: float, stops: list[dict] | None, 
     return d_km, mins, poly
 
 
-def _quote_fare_cents(pickup_lat: float, pickup_lon: float, dropoff_lat: float, dropoff_lon: float, surge_multiplier: float = 1.0, stops: list[dict] | None = None, ride_class: str | None = None) -> tuple[int, float]:
-    dist, _mins = _route_distance_duration(pickup_lat, pickup_lon, stops, dropoff_lat, dropoff_lon)
-    fare = settings.BASE_FARE_CENTS + int(round(settings.PER_KM_CENTS * dist))
-    # Apply surge
-    fare = int(round(fare * max(1.0, surge_multiplier)))
+def _quote_fare_cents(pickup_lat: float, pickup_lon: float, dropoff_lat: float, dropoff_lon: float, surge_multiplier: float = 1.0, stops: list[dict] | None = None, ride_class: str | None = None) -> tuple[int, float, int]:
+    dist, eta_mins = _route_distance_duration(pickup_lat, pickup_lon, stops, dropoff_lat, dropoff_lon)
+    fare_base = settings.BASE_FARE_CENTS + int(round(settings.PER_KM_CENTS * dist))
+    fare = int(round(fare_base * max(1.0, surge_multiplier)))
+    # Traffic surcharge (ETA slower than baseline pace)
+    try:
+        base_pace = max(0.1, float(settings.TRAFFIC_BASE_PACE_MIN_PER_KM))
+    except Exception:
+        base_pace = 2.0
+    try:
+        surcharge_rate = int(settings.TRAFFIC_SURCHARGE_PER_MIN_CENTS)
+    except Exception:
+        surcharge_rate = 0
+    traffic_extra = 0
+    if surcharge_rate > 0 and eta_mins > 0 and dist > 0:
+        baseline_eta = base_pace * dist
+        slow_minutes = max(0.0, eta_mins - baseline_eta)
+        if slow_minutes > 0:
+            traffic_extra = int(round(slow_minutes * surcharge_rate))
+            try:
+                max_mult = float(settings.TRAFFIC_SURCHARGE_MAX_MULTIPLIER)
+            except Exception:
+                max_mult = 3.0
+            if max_mult > 0:
+                fare_cap = int(round(fare_base * max_mult))
+                fare = min(fare + traffic_extra, max(fare, fare_cap))
+            else:
+                fare += traffic_extra
+    else:
+        traffic_extra = 0
     # Apply ride class multiplier if provided
     try:
         if ride_class:
@@ -144,7 +169,7 @@ def _quote_fare_cents(pickup_lat: float, pickup_lon: float, dropoff_lat: float, 
     except Exception:
         min_by_class = 0
     fare = max(fare, settings.BASE_FARE_CENTS, int(min_by_class or 0))
-    return fare, dist
+    return fare, dist, int(round(eta_mins))
 
 
 def _find_nearest_available_driver(
@@ -245,7 +270,7 @@ def _eta_minutes_from_provider(from_lat: float, from_lon: float, to_lat: float, 
 def quote_ride(payload: RideRequestIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     surge = _surge_multiplier_for_location(db, payload.pickup_lat, payload.pickup_lon)
     stops = [s.dict() for s in (payload.stops or [])]
-    fare_cents, dist_km = _quote_fare_cents(
+    fare_cents, dist_km, eta_traffic = _quote_fare_cents(
         payload.pickup_lat,
         payload.pickup_lon,
         payload.dropoff_lat,
@@ -281,6 +306,7 @@ def quote_ride(payload: RideRequestIn, user: User = Depends(get_current_user), d
         discount_cents=discount_cents,
         route_polyline=poly,
         ride_class=getattr(payload, 'ride_class', None),
+        eta_minutes=eta_traffic,
     )
 
 
@@ -338,7 +364,7 @@ def request_ride(payload: RideRequestIn, request: Request, user: User = Depends(
         raise
     surge = _surge_multiplier_for_location(db, payload.pickup_lat, payload.pickup_lon)
     stops = [s.dict() for s in (payload.stops or [])]
-    fare_cents, dist_km = _quote_fare_cents(payload.pickup_lat, payload.pickup_lon, payload.dropoff_lat, payload.dropoff_lon, surge, stops, getattr(payload, 'ride_class', None))
+    fare_cents, dist_km, _eta_total = _quote_fare_cents(payload.pickup_lat, payload.pickup_lon, payload.dropoff_lat, payload.dropoff_lon, surge, stops, getattr(payload, 'ride_class', None))
     applied_code = None
     discount_cents = 0
     if getattr(payload, "promo_code", None):
@@ -450,6 +476,8 @@ def request_ride(payload: RideRequestIn, request: Request, user: User = Depends(
         created_at=ride.created_at,
         started_at=ride.started_at,
         completed_at=ride.completed_at,
+        rider_reward_applied=ride.rider_reward_applied,
+        driver_reward_fee_waived=ride.driver_reward_fee_waived,
     )
 
 
@@ -526,6 +554,8 @@ def get_ride(ride_id: str, user: User = Depends(get_current_user), db: Session =
         created_at=r.created_at,
         started_at=r.started_at,
         completed_at=r.completed_at,
+        rider_reward_applied=getattr(r, 'rider_reward_applied', False),
+        driver_reward_fee_waived=getattr(r, 'driver_reward_fee_waived', False),
     )
 
 
@@ -754,6 +784,8 @@ def complete_ride(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride not found")
     if ride.driver_id != drv.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your ride")
+    prev = ride.status
+    just_completed = False
     if ride.status == "completed":
         # idempotent
         pass
@@ -773,18 +805,64 @@ def complete_ride(
         # For MVP final fare equals quote
         ride.final_fare_cents = ride.quoted_fare_cents
         drv.status = "available"
+        just_completed = True
+
+    if just_completed:
+        interval = max(1, int(getattr(settings, "LOYALTY_RIDE_INTERVAL", 10)))
+        try:
+            rider_user = (
+                db.query(User)
+                .filter(User.id == ride.rider_user_id)
+                .with_for_update()
+                .one()
+            )
+        except Exception:
+            rider_user = None
+        try:
+            driver_user = (
+                db.query(User)
+                .filter(User.id == drv.user_id)
+                .with_for_update()
+                .one()
+            )
+        except Exception:
+            driver_user = None
+
+        if rider_user is not None:
+            rider_count = int(getattr(rider_user, "rider_loyalty_count", 0) or 0) + 1
+            if rider_count >= interval:
+                cap = int(getattr(settings, "LOYALTY_RIDER_FREE_CAP_CENTS", 50000) or 0)
+                if (ride.final_fare_cents or 0) <= cap:
+                    ride.final_fare_cents = 0
+                    ride.rider_reward_applied = True
+                rider_count = 0
+            rider_user.rider_loyalty_count = rider_count
+
+        if driver_user is not None:
+            driver_count = int(getattr(driver_user, "driver_loyalty_count", 0) or 0) + 1
+            if driver_count >= interval:
+                ride.driver_reward_fee_waived = True
+                driver_count = 0
+            driver_user.driver_loyalty_count = driver_count
     db.flush()
     _count_transition(prev, ride.status)
     # Cash ride & escrow release: if used, release escrow to driver on successful completion
     payment_request_id = None
     platform_fee_cents: int | None = None
+    reward_fee_credit = 0
+    driver_reward_current = bool(getattr(ride, "driver_reward_fee_waived", False))
     try:
-        if ride.final_fare_cents:
+        if ride.final_fare_cents is not None:
             # Compute fee
             fee_bps = settings.PLATFORM_FEE_BPS
-            fee = int((ride.final_fare_cents * fee_bps + 5000) // 10000) if (fee_bps and ride.final_fare_cents) else 0
+            fee = 0
+            if fee_bps and ride.final_fare_cents:
+                fee = int((ride.final_fare_cents * fee_bps + 5000) // 10000)
+            if driver_reward_current:
+                reward_fee_credit = fee
+                fee = 0
+            platform_fee_cents = fee
             if fee > 0:
-                platform_fee_cents = fee
                 # When Taxi Wallet is enabled, the fee was already debited at accept.
                 # For legacy mode (Taxi Wallet disabled), keep direct debit from Payments main wallet.
                 if not getattr(settings, "TAXI_WALLET_ENABLED", True):
@@ -809,6 +887,54 @@ def complete_ride(
                         pass
     except Exception:
         pass
+
+    should_credit_wallet = (
+        just_completed
+        and getattr(settings, "TAXI_WALLET_ENABLED", True)
+        and (
+            driver_reward_current
+            or (ride.final_fare_cents or 0) == 0
+        )
+    )
+    if should_credit_wallet:
+        try:
+            w = db.query(TaxiWallet).filter(TaxiWallet.driver_id == drv.id).with_for_update().one_or_none()
+            if w is None:
+                w = TaxiWallet(driver_id=drv.id, balance_cents=0)
+                db.add(w)
+                db.flush()
+            entry = (
+                db.query(TaxiWalletEntry)
+                .filter(
+                    TaxiWalletEntry.wallet_id == w.id,
+                    TaxiWalletEntry.ride_id == ride.id,
+                    TaxiWalletEntry.type == "fee",
+                )
+                .one_or_none()
+            )
+            amount_to_credit = 0
+            if entry is not None:
+                amount_to_credit = max(0, -int(entry.amount_cents_signed or 0))
+            if amount_to_credit == 0 and reward_fee_credit > 0:
+                amount_to_credit = reward_fee_credit
+            if amount_to_credit > 0:
+                w.balance_cents += amount_to_credit
+                entry_type = "reward" if driver_reward_current else "refund"
+                reason = "driver_loyalty_fee_waiver" if driver_reward_current else "rider_free_ride"
+                db.add(
+                    TaxiWalletEntry(
+                        wallet_id=w.id,
+                        type=entry_type,
+                        amount_cents_signed=amount_to_credit,
+                        ride_id=ride.id,
+                        original_fare_cents=ride.final_fare_cents,
+                        fee_cents=0,
+                        driver_take_home_cents=max(0, (ride.final_fare_cents or 0)),
+                        meta={"reason": reason, "reimbursed_fee_cents": amount_to_credit},
+                    )
+                )
+        except Exception:
+            pass
 
     # Release escrow to driver main wallet (if any)
     try:
@@ -847,6 +973,8 @@ def complete_ride(
         "quoted_fare_cents": ride.quoted_fare_cents,
         "final_fare_cents": ride.final_fare_cents,
         "distance_km": ride.distance_km,
+        "rider_reward_applied": bool(getattr(ride, "rider_reward_applied", False)),
+        "driver_reward_fee_waived": bool(getattr(ride, "driver_reward_fee_waived", False)),
     }
     background_tasks.add_task(ride_ws_manager.broadcast_ride_status, ride_id, payload)
     # Notify driver channel about completion
@@ -875,6 +1003,8 @@ def complete_ride(
         created_at=ride.created_at,
         started_at=ride.started_at,
         completed_at=ride.completed_at,
+        rider_reward_applied=bool(getattr(ride, "rider_reward_applied", False)),
+        driver_reward_fee_waived=bool(getattr(ride, "driver_reward_fee_waived", False)),
     )
 
 
@@ -890,6 +1020,11 @@ def list_my_rides(user: User = Depends(get_current_user), db: Session = Depends(
     out = []
     for r in rides:
         stops = db.query(RideStop).filter(RideStop.ride_id == r.id).order_by(RideStop.seq.asc()).all()
+        rating = (
+            db.query(RideRating)
+            .filter(RideRating.ride_id == r.id, RideRating.rider_user_id == user.id)
+            .one_or_none()
+        )
         out.append(
             RideOut(
                 id=str(r.id),
@@ -908,6 +1043,11 @@ def list_my_rides(user: User = Depends(get_current_user), db: Session = Depends(
                 created_at=r.created_at,
                 started_at=r.started_at,
                 completed_at=r.completed_at,
+                rider_reward_applied=getattr(r, 'rider_reward_applied', False),
+                driver_reward_fee_waived=getattr(r, 'driver_reward_fee_waived', False),
+                my_rating=rating.rating if rating else None,
+                my_rating_comment=rating.comment if rating else None,
+                my_rating_created_at=rating.created_at if rating else None,
             )
         )
     return RidesListOut(rides=out)
@@ -1392,4 +1532,6 @@ def get_ride_receipt(ride_id: str, user: User = Depends(get_current_user), db: S
         "distance_km": ride.distance_km,
         "escrow_amount_cents": escrow_amt,
         "escrow_released": escrow_released,
+        "rider_reward_applied": bool(getattr(ride, "rider_reward_applied", False)),
+        "driver_reward_fee_waived": bool(getattr(ride, "driver_reward_fee_waived", False)),
     }

@@ -1,0 +1,55 @@
+name: Nightly Health
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  nightly-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
+      - name: Run repo health check
+        id: health
+        run: |
+          set -e
+          bash tools/health_check.sh | tee health.log
+
+      - name: Upload health log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-health-log
+          path: health.log
+
+      - name: Create issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('health.log', 'utf8');
+            const truncated = body.length > 60000 ? body.slice(-60000) : body;
+            const title = `Nightly Health Check failed (${new Date().toISOString()})`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: `Health check failed. Tail of log (last 60k chars):\n\n\n\n${truncated}`
+            });
+

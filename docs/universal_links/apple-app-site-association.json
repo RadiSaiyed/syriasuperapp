@@ -1,0 +1,12 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "<IOS_TEAM_ID>.<IOS_BUNDLE_ID>",
+        "paths": [ "/request/*" ]
+      }
+    ]
+  }
+}
+
