@@ -18,6 +18,7 @@ from ..schemas import (
     PropertyCalendarDayOut,
     SuggestOut,
     SuggestItemOut,
+    CityPopularOut,
 )
 
 
@@ -852,3 +853,121 @@ def suggest(q: str, limit: int = 10, db: Session = Depends(get_db)):
         pass
     # Trim to limit
     return SuggestOut(items=items[:limit])
+
+
+@router.get("/cities/popular", response_model=list[CityPopularOut])
+def popular_cities(limit: int = 8, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    rows = (
+        db.query(Property.city, func.count(Property.id))
+        .filter(Property.city.isnot(None))
+        .group_by(Property.city)
+        .order_by(func.count(Property.id).desc())
+        .limit(limit)
+        .all()
+    )
+    out: list[CityPopularOut] = []
+    for (city, cnt) in rows:
+        if not city:
+            continue
+        # Avg rating per city
+        try:
+            avg = (
+                db.query(func.avg(Review.rating))
+                .filter(Review.property_id.in_(db.query(Property.id).filter(Property.city == city)))
+                .scalar()
+            )
+            avg_rating = float(avg) if avg is not None else None
+        except Exception:
+            avg_rating = None
+        # Min base price among units in city
+        try:
+            from sqlalchemy import select
+            prop_ids = [pid for (pid,) in db.query(Property.id).filter(Property.city == city).all()]
+            min_price = None
+            if prop_ids:
+                unit_min = db.query(func.min(Unit.price_cents_per_night)).filter(Unit.property_id.in_(prop_ids)).scalar()
+                min_price = int(unit_min) if unit_min is not None else None
+        except Exception:
+            min_price = None
+        # Representative image: first image of a property in city
+        try:
+            img = (
+                db.query(PropertyImage)
+                .join(Property, Property.id == PropertyImage.property_id)
+                .filter(Property.city == city)
+                .order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc())
+                .first()
+            )
+            image_url = img.url if img else None
+        except Exception:
+            image_url = None
+        out.append(CityPopularOut(city=city, property_count=int(cnt), avg_rating=avg_rating, image_url=image_url, min_price_cents=min_price))
+    return out
+
+
+@router.get("/properties/nearby", response_model=list[PropertyOut])
+def properties_nearby(lat: float, lon: float, radius_km: float = 10.0, limit: int = 100, db: Session = Depends(get_db), request: Request = None):
+    from sqlalchemy import func
+    # Load candidates (bounded to a reasonable set; actual distance computed in Python)
+    props = db.query(Property).limit(2000).all()
+    if not props:
+        return []
+    def _to_float(v):
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+    def _haversine_km(lat1, lon1, lat2, lon2):
+        from math import radians, sin, cos, asin, sqrt
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+        return 2 * asin(sqrt(a)) * 6371.0
+    # Aggregates
+    prop_ids = [p.id for p in props]
+    aggs = (
+        db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+        .filter(Review.property_id.in_(prop_ids))
+        .group_by(Review.property_id)
+        .all()
+    )
+    rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+    imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(prop_ids)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+    first_img: dict = {}
+    for im in imgs:
+        if im.property_id not in first_img:
+            first_img[im.property_id] = im.url
+    # Favorites
+    fav_map: dict = {}
+    try:
+        if request is not None:
+            from ..auth import try_get_user
+            user = try_get_user(request, db)
+            if user:
+                from ..models import FavoriteProperty
+                favs = db.query(FavoriteProperty.property_id).filter(FavoriteProperty.user_id == user.id, FavoriteProperty.property_id.in_(prop_ids)).all()
+                fav_map = {pid: True for (pid,) in favs}
+    except Exception:
+        pass
+    # Distance filter/sort
+    rows = []
+    for p in props:
+        plat = _to_float(p.latitude)
+        plon = _to_float(p.longitude)
+        if plat is None or plon is None:
+            continue
+        dkm = _haversine_km(lat, lon, plat, plon)
+        if dkm <= radius_km:
+            ravg, rcnt = rating_map.get(p.id, (None, 0))
+            rows.append((dkm, p, ravg, rcnt))
+    rows.sort(key=lambda t: (t[0], t[2] if t[2] is not None else -1.0, t[3]))
+    out: list[PropertyOut] = []
+    for (dkm, p, ravg, rcnt) in rows[:limit]:
+        out.append(PropertyOut(
+            id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
+            address=p.address, latitude=p.latitude, longitude=p.longitude,
+            rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
+            image_url=first_img.get(p.id),
+        ))
+    return out

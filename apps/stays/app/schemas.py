@@ -272,6 +272,14 @@ class PropertyCalendarOut(BaseModel):
     days: List[PropertyCalendarDayOut]
 
 
+class CityPopularOut(BaseModel):
+    city: str
+    property_count: int
+    avg_rating: Optional[float] = None
+    image_url: Optional[str] = None
+    min_price_cents: Optional[int] = None
+
+
 class SuggestItemOut(BaseModel):
     type: Literal["city", "property"]
     id: Optional[str] = None
