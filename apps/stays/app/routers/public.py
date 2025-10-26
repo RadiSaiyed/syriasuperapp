@@ -719,12 +719,14 @@ def top_properties(city: str | None = None, limit: int = 12, db: Session = Depen
             cache.set(ck, out, settings.CACHE_DEFAULT_TTL_SECS)
         except Exception:
             pass
-    try:
-        if response is not None:
+    if response is not None:
+        try:
+            from ..utils.http_cache import compute_etag as _ce
+            response.headers["ETag"] = _ce([x.model_dump() for x in out])
             response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
             response.headers["Vary"] = "Authorization"
-    except Exception:
-        pass
+        except Exception:
+            pass
     return out
 
 
@@ -882,6 +884,11 @@ def suggest(q: str, response: Response, limit: int = 10, db: Session = Depends(g
         except Exception:
             pass
     try:
+        from ..utils.http_cache import compute_etag as _ce
+        response.headers["ETag"] = _ce([x.model_dump() for x in items])
+    except Exception:
+        pass
+    try:
         response.headers["Cache-Control"] = f"public, max-age={max(5, (settings.CACHE_DEFAULT_TTL_SECS // 2) or 30)}"
     except Exception:
         pass
@@ -947,6 +954,8 @@ def popular_cities(response: Response, limit: int = 8, db: Session = Depends(get
         except Exception:
             pass
     try:
+        from ..utils.http_cache import compute_etag as _ce
+        response.headers["ETag"] = _ce([x.model_dump() if hasattr(x, "model_dump") else x.__dict__ for x in out])
         response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
     except Exception:
         pass
@@ -1018,6 +1027,8 @@ def properties_nearby(lat: float, lon: float, response: Response, radius_km: flo
             image_url=first_img.get(p.id),
         ))
     try:
+        from ..utils.http_cache import compute_etag as _ce
+        response.headers["ETag"] = _ce([x.model_dump() for x in out])
         response.headers["Cache-Control"] = "public, max-age=60"
         response.headers["Vary"] = "Authorization"
     except Exception:
