@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Property, Unit, Reservation, UnitAmenity, Review, PropertyImage, UnitBlock, UnitPrice, FavoriteProperty
+from ..config import settings
+from ..utils.cache import cache
 from ..schemas import (
     PropertyOut,
     PropertyDetailOut,
@@ -649,7 +651,7 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
 
 
 @router.get("/properties/top", response_model=list[PropertyOut])
-def top_properties(city: str | None = None, limit: int = 12, db: Session = Depends(get_db), request: Request = None):
+def top_properties(city: str | None = None, limit: int = 12, db: Session = Depends(get_db), request: Request = None, response: Response = None):
     from sqlalchemy import func
     if settings.CACHE_ENABLED:
         ck = ("top_props", city or "_all_", int(limit))
@@ -717,6 +719,12 @@ def top_properties(city: str | None = None, limit: int = 12, db: Session = Depen
             cache.set(ck, out, settings.CACHE_DEFAULT_TTL_SECS)
         except Exception:
             pass
+    try:
+        if response is not None:
+            response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
+            response.headers["Vary"] = "Authorization"
+    except Exception:
+        pass
     return out
 
 
@@ -798,7 +806,7 @@ def property_calendar(property_id: str, start: str | None = None, end: str | Non
 
 
 @router.get("/suggest", response_model=SuggestOut)
-def suggest(q: str, limit: int = 10, db: Session = Depends(get_db)):
+def suggest(q: str, response: Response, limit: int = 10, db: Session = Depends(get_db)):
     from sqlalchemy import or_, func
     q = (q or "").strip()
     if not q:
@@ -873,11 +881,15 @@ def suggest(q: str, limit: int = 10, db: Session = Depends(get_db)):
             cache.set(cache_key, items, settings.CACHE_DEFAULT_TTL_SECS // 2 or 30)
         except Exception:
             pass
+    try:
+        response.headers["Cache-Control"] = f"public, max-age={max(5, (settings.CACHE_DEFAULT_TTL_SECS // 2) or 30)}"
+    except Exception:
+        pass
     return SuggestOut(items=items)
 
 
 @router.get("/cities/popular", response_model=list[CityPopularOut])
-def popular_cities(limit: int = 8, db: Session = Depends(get_db)):
+def popular_cities(response: Response, limit: int = 8, db: Session = Depends(get_db)):
     from sqlalchemy import func
     if settings.CACHE_ENABLED:
         ck = ("cities_popular", int(limit))
@@ -934,11 +946,15 @@ def popular_cities(limit: int = 8, db: Session = Depends(get_db)):
             cache.set(ck, out, settings.CACHE_DEFAULT_TTL_SECS)
         except Exception:
             pass
+    try:
+        response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
+    except Exception:
+        pass
     return out
 
 
 @router.get("/properties/nearby", response_model=list[PropertyOut])
-def properties_nearby(lat: float, lon: float, radius_km: float = 10.0, limit: int = 100, db: Session = Depends(get_db), request: Request = None):
+def properties_nearby(lat: float, lon: float, response: Response, radius_km: float = 10.0, limit: int = 100, db: Session = Depends(get_db), request: Request = None):
     from sqlalchemy import func
     # Load candidates (bounded to a reasonable set; actual distance computed in Python)
     props = db.query(Property).limit(2000).all()
@@ -1001,4 +1017,9 @@ def properties_nearby(lat: float, lon: float, radius_km: float = 10.0, limit: in
             rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
             image_url=first_img.get(p.id),
         ))
+    try:
+        response.headers["Cache-Control"] = "public, max-age=60"
+        response.headers["Vary"] = "Authorization"
+    except Exception:
+        pass
     return out
