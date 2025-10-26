@@ -47,6 +47,7 @@ class PropertyOut(BaseModel):
     price_preview_total_cents: Optional[int] = None
     price_preview_nightly_cents: Optional[int] = None
     distance_km: Optional[float] = None
+    badges: List[str] = []
 
 
 class UnitCreateIn(BaseModel):

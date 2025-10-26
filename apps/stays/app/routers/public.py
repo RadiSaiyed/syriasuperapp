@@ -49,6 +49,13 @@ def list_properties(
     check_out: str | None = None,
     center_lat: float | None = None,
     center_lon: float | None = None,
+    # Policy-like filters via unit amenities
+    free_cancellation: bool = False,
+    breakfast_included: bool = False,
+    non_refundable: bool = False,
+    pay_at_property: bool = False,
+    no_prepayment: bool = False,
+    available_only: bool = False,
     db: Session = Depends(get_db),
 ):
     from sqlalchemy import or_, func
@@ -158,6 +165,111 @@ def list_properties(
         rows.sort(key=lambda r: (r[1], r[2], r[3]), reverse=True)
 
     total = len(rows)
+    # Preload amenities if policy filters are requested
+    if any([free_cancellation, breakfast_included, non_refundable, pay_at_property, no_prepayment]):
+        try:
+            prop_ids = [r[0].id for r in rows]
+            units = db.query(Unit.id, Unit.property_id).filter(Unit.property_id.in_(prop_ids), Unit.active == True).all()  # noqa: E712
+            unit_ids = [u.id for u in units]
+            prop_units = {}
+            for (uid, pid) in units:
+                prop_units.setdefault(pid, []).append(uid)
+            tags_map = {}
+            if unit_ids:
+                for a in db.query(UnitAmenity.unit_id, UnitAmenity.tag).filter(UnitAmenity.unit_id.in_(unit_ids)).all():
+                    tags_map.setdefault(a.unit_id, []).append((a.tag or "").strip())
+            def prop_has(tag_norm: str, pid):
+                for uid in prop_units.get(pid, []):
+                    norms = {t.replace('-', '_').lower() for t in (x for x in tags_map.get(uid, []))}
+                    if tag_norm in norms or (tag_norm == 'breakfast_included' and 'breakfast' in norms):
+                        return True
+                return False
+            filtered = []
+            for r in rows:
+                pid = r[0].id
+                ok = True
+                if free_cancellation and not prop_has('free_cancellation', pid):
+                    ok = False
+                if breakfast_included and not prop_has('breakfast_included', pid):
+                    ok = False
+                if non_refundable and not prop_has('non_refundable', pid):
+                    ok = False
+                if pay_at_property and not prop_has('pay_at_property', pid):
+                    ok = False
+                if no_prepayment and not prop_has('no_prepayment', pid):
+                    ok = False
+                if ok:
+                    filtered.append(r)
+            rows = filtered
+            total = len(rows)
+        except Exception:
+            pass
+
+    # Compute price previews and availability if needed before sorting/paginating
+    preview_map: dict = {}
+    avail_map: dict = {}
+    if (include_price_preview or available_only or key in ("price_preview", "price")) and check_in and check_out:
+        try:
+            from datetime import date as _date, timedelta as _td
+            ci = _date.fromisoformat(check_in)
+            co = _date.fromisoformat(check_out)
+            if co > ci:
+                for (p, _a, _c, _pop, _lat, _lon) in rows:
+                    units = db.query(Unit).filter(Unit.property_id == p.id, Unit.active == True).all()  # noqa: E712
+                    if not units:
+                        avail_map[p.id] = False
+                        continue
+                    unit_ids = [u.id for u in units]
+                    blocks = db.query(UnitBlock).filter(UnitBlock.unit_id.in_(unit_ids)).all() if unit_ids else []
+                    prices = db.query(UnitPrice).filter(UnitPrice.unit_id.in_(unit_ids), UnitPrice.date >= ci, UnitPrice.date < co).all() if unit_ids else []
+                    blocks_by_unit = {}
+                    for b in blocks:
+                        blocks_by_unit.setdefault(b.unit_id, []).append(b)
+                    prices_by_unit = {}
+                    for pr in prices:
+                        prices_by_unit.setdefault(pr.unit_id, {})[pr.date] = pr.price_cents
+                    nights = int((co - ci).days)
+                    best_total = None
+                    best_avg = None
+                    any_avail = False
+                    for u in units:
+                        rs = db.query(Reservation).filter(Reservation.unit_id == u.id, Reservation.status.in_(["created", "confirmed"]))
+                        res_days = [(r.check_in, r.check_out) for r in rs]
+                        date_iter = ci
+                        min_avail = u.total_units
+                        total_cost = int(u.cleaning_fee_cents)
+                        blks = blocks_by_unit.get(u.id, [])
+                        while date_iter < co:
+                            occ = sum(1 for (ci2, co2) in res_days if ci2 <= date_iter and date_iter < co2)
+                            blk = sum(b.blocked_units for b in blks if b.start_date <= date_iter and date_iter < b.end_date)
+                            avail_today = max(0, u.total_units - occ - blk)
+                            if avail_today < min_avail:
+                                min_avail = avail_today
+                            nightly = prices_by_unit.get(u.id, {}).get(date_iter, u.price_cents_per_night)
+                            total_cost += int(nightly)
+                            date_iter = date_iter + _td(days=1)
+                        if min_avail > 0:
+                            any_avail = True
+                            if best_total is None or total_cost < best_total:
+                                best_total = int(total_cost)
+                                best_avg = int((total_cost - int(u.cleaning_fee_cents)) / float(nights)) if nights > 0 else int(u.price_cents_per_night)
+                    preview_map[p.id] = (best_total, best_avg)
+                    avail_map[p.id] = any_avail
+        except Exception:
+            preview_map = {}
+            avail_map = {}
+
+    if available_only and avail_map:
+        rows = [r for r in rows if avail_map.get(r[0].id, False)]
+        total = len(rows)
+
+    # Sorting with price_preview
+    if key in ("price_preview", "price") and preview_map:
+        rows.sort(key=lambda r: (preview_map.get(r[0].id, (10**12, 10**12))[0], preview_map.get(r[0].id, (10**12, 10**12))[1]), reverse=reverse)
+    else:
+        # existing sorting already applied earlier based on key
+        pass
+
     sliced = rows[offset: offset + limit]
     # favorites count map (optional)
     fav_count_map: dict = {}
@@ -175,55 +287,7 @@ def list_properties(
 
     out: list[PropertyOut] = []
     # Optional price preview for provided dates
-    preview_map: dict = {}
-    if include_price_preview and check_in and check_out:
-        try:
-            from datetime import date as _date, timedelta as _td
-            ci = _date.fromisoformat(check_in)
-            co = _date.fromisoformat(check_out)
-            if co > ci:
-                for (p, _a, _c, _pop, _lat, _lon) in sliced:
-                    units = db.query(Unit).filter(Unit.property_id == p.id, Unit.active == True).all()  # noqa: E712
-                    if not units:
-                        continue
-                    unit_ids = [u.id for u in units]
-                    blocks = db.query(UnitBlock).filter(UnitBlock.unit_id.in_(unit_ids)).all() if unit_ids else []
-                    prices = db.query(UnitPrice).filter(UnitPrice.unit_id.in_(unit_ids), UnitPrice.date >= ci, UnitPrice.date < co).all() if unit_ids else []
-                    blocks_by_unit = {}
-                    for b in blocks:
-                        blocks_by_unit.setdefault(b.unit_id, []).append(b)
-                    prices_by_unit = {}
-                    for pr in prices:
-                        prices_by_unit.setdefault(pr.unit_id, {})[pr.date] = pr.price_cents
-                    nights = int((co - ci).days)
-                    best_total = None
-                    best_avg = None
-                    for u in units:
-                        # compute availability and cost
-                        rs = db.query(Reservation).filter(Reservation.unit_id == u.id, Reservation.status.in_(["created", "confirmed"]))
-                        res_days = [(r.check_in, r.check_out) for r in rs]
-                        date_iter = ci
-                        min_avail = u.total_units
-                        total_cost = int(u.cleaning_fee_cents)
-                        blks = blocks_by_unit.get(u.id, [])
-                        while date_iter < co:
-                            occ = sum(1 for (ci2, co2) in res_days if ci2 <= date_iter and date_iter < co2)
-                            blk = sum(b.blocked_units for b in blks if b.start_date <= date_iter and date_iter < b.end_date)
-                            avail_today = max(0, u.total_units - occ - blk)
-                            if avail_today < min_avail:
-                                min_avail = avail_today
-                            nightly = prices_by_unit.get(u.id, {}).get(date_iter, u.price_cents_per_night)
-                            total_cost += int(nightly)
-                            date_iter = date_iter + _td(days=1)
-                        if min_avail <= 0:
-                            continue
-                        if best_total is None or total_cost < best_total:
-                            best_total = int(total_cost)
-                            best_avg = int((total_cost - int(u.cleaning_fee_cents)) / float(nights)) if nights > 0 else int(u.price_cents_per_night)
-                    if best_total is not None:
-                        preview_map[p.id] = (best_total, best_avg)
-        except Exception:
-            preview_map = {}
+    # preview_map already computed above if needed
 
     for (p, avg, cnt, _pop, _lat, _lon) in sliced:
         dist_val = None
@@ -233,6 +297,13 @@ def list_properties(
             dlon = radians(_lon - center_lon)
             a = sin(dlat/2)**2 + cos(radians(center_lat)) * cos(radians(_lat)) * sin(dlon/2)**2
             dist_val = 2 * asin(sqrt(a)) * 6371.0
+        # badges
+        badges: list[str] = []
+        if (avg if avg is not None else -1.0) >= 4.7:
+            badges.append("top_rated")
+        if pop_map.get(p.id, 0) >= 5:
+            badges.append("popular_choice")
+
         out.append(PropertyOut(
             id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
             address=p.address, latitude=p.latitude, longitude=p.longitude,
@@ -243,6 +314,7 @@ def list_properties(
             price_preview_total_cents=preview_map.get(p.id, (None, None))[0] if preview_map else None,
             price_preview_nightly_cents=preview_map.get(p.id, (None, None))[1] if preview_map else None,
             distance_km=dist_val,
+            badges=badges,
         ))
     # Pagination headers
     if response is not None and request is not None:
