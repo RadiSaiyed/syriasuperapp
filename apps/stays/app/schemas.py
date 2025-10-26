@@ -43,6 +43,7 @@ class PropertyOut(BaseModel):
     rating_count: Optional[int] = None
     is_favorite: Optional[bool] = None
     image_url: Optional[str] = None
+    favorites_count: Optional[int] = None
 
 
 class UnitCreateIn(BaseModel):

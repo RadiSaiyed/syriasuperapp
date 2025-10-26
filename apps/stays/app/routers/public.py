@@ -1,9 +1,9 @@
 from datetime import timedelta
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Property, Unit, Reservation, UnitAmenity, Review, PropertyImage, UnitBlock, UnitPrice
+from ..models import Property, Unit, Reservation, UnitAmenity, Review, PropertyImage, UnitBlock, UnitPrice, FavoriteProperty
 from ..schemas import (
     PropertyOut,
     PropertyDetailOut,
@@ -24,6 +24,8 @@ router = APIRouter(tags=["public"])  # no auth required
 
 @router.get("/properties", response_model=list[PropertyOut])
 def list_properties(
+    request: Request,
+    response: Response,
     city: str | None = None,
     type: str | None = None,
     q: str | None = None,
@@ -36,8 +38,8 @@ def list_properties(
     max_lat: float | None = None,
     min_lon: float | None = None,
     max_lon: float | None = None,
+    include_favorites_count: bool = False,
     db: Session = Depends(get_db),
-    request: Request = None,
 ):
     from sqlalchemy import or_, func
 
@@ -135,7 +137,22 @@ def list_properties(
     else:
         rows.sort(key=lambda r: (r[1], r[2], r[3]), reverse=True)
 
+    total = len(rows)
     sliced = rows[offset: offset + limit]
+    # favorites count map (optional)
+    fav_count_map: dict = {}
+    if include_favorites_count and props:
+        try:
+            counts = (
+                db.query(FavoriteProperty.property_id, func.count(FavoriteProperty.id))
+                .filter(FavoriteProperty.property_id.in_(prop_ids))
+                .group_by(FavoriteProperty.property_id)
+                .all()
+            )
+            fav_count_map = {pid: int(c) for (pid, c) in counts}
+        except Exception:
+            fav_count_map = {}
+
     out: list[PropertyOut] = []
     for (p, avg, cnt, _pop, _lat, _lon) in sliced:
         out.append(PropertyOut(
@@ -144,7 +161,28 @@ def list_properties(
             rating_avg=(avg if avg != -1.0 else None), rating_count=cnt,
             is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
             image_url=first_img.get(p.id),
+            favorites_count=fav_count_map.get(p.id) if fav_count_map else None,
         ))
+    # Pagination headers
+    if response is not None and request is not None:
+        try:
+            response.headers["X-Total-Count"] = str(total)
+            # build prev/next links
+            from starlette.datastructures import URL
+            base = URL(str(request.url))
+            links = []
+            if offset > 0:
+                prev_off = max(0, offset - limit)
+                prev_url = str(base.include_query_params(offset=prev_off, limit=limit))
+                links.append(f"<{prev_url}>; rel=\"prev\"")
+            if offset + limit < total:
+                next_off = offset + limit
+                next_url = str(base.include_query_params(offset=next_off, limit=limit))
+                links.append(f"<{next_url}>; rel=\"next\"")
+            if links:
+                response.headers["Link"] = ", ".join(links)
+        except Exception:
+            pass
     return out
 
 
@@ -506,6 +544,68 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
         price_max_cents=price_max,
     )
     return SearchAvailabilityOut(results=sliced, total=total, next_offset=next_off, facets=facets)
+
+
+@router.get("/properties/top", response_model=list[PropertyOut])
+def top_properties(city: str | None = None, limit: int = 12, db: Session = Depends(get_db), request: Request = None):
+    from sqlalchemy import func
+    query = db.query(Property)
+    if city:
+        query = query.filter(Property.city == city)
+    props = query.order_by(Property.created_at.desc()).limit(1000).all()
+    if not props:
+        return []
+    prop_ids = [p.id for p in props]
+    # ratings
+    aggs = (
+        db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+        .filter(Review.property_id.in_(prop_ids))
+        .group_by(Review.property_id)
+        .all()
+    )
+    rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+    # popularity
+    pops = (
+        db.query(Reservation.property_id, func.count(Reservation.id))
+        .filter(Reservation.property_id.in_(prop_ids))
+        .group_by(Reservation.property_id)
+        .all()
+    )
+    pop_map = {pid: int(cnt) for (pid, cnt) in pops}
+    # first image
+    imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(prop_ids)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+    first_img: dict = {}
+    for im in imgs:
+        if im.property_id not in first_img:
+            first_img[im.property_id] = im.url
+    # favorites for user
+    fav_map: dict = {}
+    try:
+        if request is not None:
+            from ..auth import try_get_user
+            user = try_get_user(request, db)
+            if user:
+                favs = db.query(FavoriteProperty.property_id).filter(FavoriteProperty.user_id == user.id, FavoriteProperty.property_id.in_(prop_ids)).all()
+                fav_map = {pid: True for (pid,) in favs}
+    except Exception:
+        pass
+
+    rows = []
+    for p in props:
+        ravg, rcnt = rating_map.get(p.id, (0.0, 0))
+        pop = pop_map.get(p.id, 0)
+        score = (ravg or 0.0) * 0.7 + min(pop, 100) / 100.0 * 0.3
+        rows.append((p, score, ravg or None, rcnt))
+    rows.sort(key=lambda t: (t[1], t[2] or 0.0, t[3]), reverse=True)
+    out: list[PropertyOut] = []
+    for (p, _score, ravg, rcnt) in rows[:limit]:
+        out.append(PropertyOut(
+            id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
+            address=p.address, latitude=p.latitude, longitude=p.longitude,
+            rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
+            image_url=first_img.get(p.id),
+        ))
+    return out
 
 
 @router.get("/units/{unit_id}/calendar", response_model=UnitCalendarOut)
