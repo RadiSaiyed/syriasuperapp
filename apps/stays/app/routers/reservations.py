@@ -11,6 +11,7 @@ from ..config import settings
 import httpx
 from superapp_shared.internal_hmac import sign_internal_request_headers
 from ..utils.webhooks import send_webhooks
+from ..utils.ids import as_uuid
 
 
 router = APIRouter(prefix="/reservations", tags=["reservations"])
@@ -22,7 +23,7 @@ def _overlaps(a_start, a_end, b_start, b_end) -> bool:
 
 @router.post("", response_model=ReservationOut)
 def create_reservation(payload: ReservationCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    unit = db.get(Unit, payload.unit_id)
+    unit = db.get(Unit, as_uuid(payload.unit_id))
     if not unit or not unit.active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unit not available")
     if payload.check_in >= payload.check_out:
@@ -103,7 +104,7 @@ def my_reservations(user: User = Depends(get_current_user), db: Session = Depend
 
 @router.post("/{reservation_id}/cancel", response_model=ReservationOut)
 def cancel_my_reservation(reservation_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    r = db.get(Reservation, reservation_id)
+    r = db.get(Reservation, as_uuid(reservation_id))
     if not r or r.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reservation not found")
     if r.status == "canceled":

@@ -20,8 +20,20 @@ API (MVP)
   - `POST /auth/verify_otp` — create user if needed, return JWT
 - Public
   - `GET  /properties` — list properties (filters: `city`, `type`, `q`; includes `rating_avg`, `rating_count`, address/geo when available)
+    - Extras: `min_rating`, sorting `sort_by=rating|popularity|created|name`, `sort_order=asc|desc`, pagination `limit`, `offset`, optional map bounds `min_lat,max_lat,min_lon,max_lon`.
   - `GET  /properties/{id}` — property details with units, images, aggregated ratings
-  - `POST /search_availability` — search by city / dates / guests (filters: `min_price_cents`, `max_price_cents`, `capacity_min`, `property_type`, `amenities`, `amenities_mode=any|all`, pagination: `limit`, `offset`; response includes `total`, `next_offset`).
+    - Extras: `rating_histogram`, `similar` (top 6 similar properties in same city/type)
+  - `POST /search_availability` — search by city / dates / guests
+    - Filters: `min_price_cents`, `max_price_cents`, `capacity_min`, `property_type`, `amenities`, `amenities_mode=any|all`, `min_rating`, optional `property_ids`
+    - Map: optional bounds `min_lat,max_lat,min_lon,max_lon`, or distance sorting requires `center_lat,center_lon`
+    - Sorting: `sort_by=price|rating|popularity|distance|best_value|recommended`, `sort_order=asc|desc`
+    - Grouping: `group_by_property=true` returns cheapest unit per property
+    - Result extras: `property_image_url`, `property_rating_avg`, `property_rating_count`, `distance_km`
+    - Facets: `amenities_counts`, `rating_bands`, `price_min_cents`, `price_max_cents`
+    - Pagination: `limit`, `offset`; response includes `total`, `next_offset`.
+  - `GET  /units/{unit_id}/calendar` — per-day availability and price for a date range
+    - Query: `start`, `end` (ISO date). Defaults to next 30 days.
+    - Response: `{ unit_id, days: [{date, available_units, price_cents}] }`
     - Availability accounts for maintenance blocks (unit‑blocking) and dynamic daily prices; total includes cleaning fee.
 - Host (property owner)
   - `POST /host/properties` — create property

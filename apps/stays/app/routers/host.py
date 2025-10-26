@@ -21,6 +21,7 @@ from ..schemas import (
     UnitPriceOut,
 )
 from ..utils.notify import notify
+from ..utils.ids import as_uuid
 from ..utils.webhooks import send_webhooks
 
 
@@ -65,7 +66,7 @@ def list_my_properties(user: User = Depends(get_current_user), db: Session = Dep
 
 @router.post("/properties/{property_id}/units", response_model=UnitOut)
 def create_unit(property_id: str, payload: UnitCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prop = db.get(Property, property_id)
+    prop = db.get(Property, as_uuid(property_id))
     if not prop:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
     if prop.owner_user_id != user.id:
@@ -96,7 +97,7 @@ def create_unit(property_id: str, payload: UnitCreateIn, user: User = Depends(ge
 
 @router.get("/properties/{property_id}/units", response_model=list[UnitOut])
 def list_units(property_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prop = db.get(Property, property_id)
+    prop = db.get(Property, as_uuid(property_id))
     if not prop:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
     if prop.owner_user_id != user.id:
@@ -119,7 +120,7 @@ def list_units(property_id: str, user: User = Depends(get_current_user), db: Ses
 
 @router.patch("/properties/{property_id}", response_model=PropertyOut)
 def update_property(property_id: str, payload: PropertyUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prop = db.get(Property, property_id)
+    prop = db.get(Property, as_uuid(property_id))
     if not prop:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
     if prop.owner_user_id != user.id:
@@ -174,7 +175,7 @@ def update_unit(unit_id: str, payload: UnitUpdateIn, user: User = Depends(get_cu
 
 @router.post("/properties/{property_id}/images", response_model=list[PropertyImageOut])
 def add_property_images(property_id: str, images: list[PropertyImageCreateIn], user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prop = db.get(Property, property_id)
+    prop = db.get(Property, as_uuid(property_id))
     if not prop:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
     if prop.owner_user_id != user.id:
@@ -190,7 +191,7 @@ def add_property_images(property_id: str, images: list[PropertyImageCreateIn], u
 
 @router.get("/properties/{property_id}/images")
 def list_property_images(property_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prop = db.get(Property, property_id)
+    prop = db.get(Property, as_uuid(property_id))
     if not prop:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
     if prop.owner_user_id != user.id:
@@ -201,7 +202,7 @@ def list_property_images(property_id: str, user: User = Depends(get_current_user
 
 @router.delete("/images/{image_id}")
 def delete_property_image(image_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    img = db.get(PropertyImage, image_id)
+    img = db.get(PropertyImage, as_uuid(image_id))
     if not img:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     prop = db.get(Property, img.property_id)
@@ -213,7 +214,7 @@ def delete_property_image(image_id: str, user: User = Depends(get_current_user),
 
 @router.post("/units/{unit_id}/blocks", response_model=UnitBlockOut)
 def create_block(unit_id: str, payload: UnitBlockCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    u = db.get(Unit, unit_id)
+    u = db.get(Unit, as_uuid(unit_id))
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unit not found")
     prop = db.get(Property, u.property_id)
@@ -229,7 +230,7 @@ def create_block(unit_id: str, payload: UnitBlockCreateIn, user: User = Depends(
 
 @router.get("/units/{unit_id}/blocks", response_model=list[UnitBlockOut])
 def list_blocks(unit_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    u = db.get(Unit, unit_id)
+    u = db.get(Unit, as_uuid(unit_id))
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unit not found")
     prop = db.get(Property, u.property_id)
@@ -241,7 +242,7 @@ def list_blocks(unit_id: str, user: User = Depends(get_current_user), db: Sessio
 
 @router.delete("/blocks/{block_id}")
 def delete_block(block_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    b = db.get(UnitBlock, block_id)
+    b = db.get(UnitBlock, as_uuid(block_id))
     if not b:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     u = db.get(Unit, b.unit_id)
@@ -254,7 +255,7 @@ def delete_block(block_id: str, user: User = Depends(get_current_user), db: Sess
 
 @router.put("/units/{unit_id}/prices", response_model=list[UnitPriceOut])
 def upsert_prices(unit_id: str, prices: list[UnitPriceIn], user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    u = db.get(Unit, unit_id)
+    u = db.get(Unit, as_uuid(unit_id))
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unit not found")
     prop = db.get(Property, u.property_id)
@@ -302,7 +303,7 @@ def list_my_reservations(user: User = Depends(get_current_user), db: Session = D
 
 @router.post("/reservations/{reservation_id}/confirm", response_model=ReservationOut)
 def confirm_reservation(reservation_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    r = db.get(Reservation, reservation_id)
+    r = db.get(Reservation, as_uuid(reservation_id))
     if not r:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reservation not found")
     prop = db.get(Property, r.property_id)
@@ -325,7 +326,7 @@ def confirm_reservation(reservation_id: str, user: User = Depends(get_current_us
 
 @router.post("/reservations/{reservation_id}/cancel", response_model=ReservationOut)
 def cancel_reservation(reservation_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    r = db.get(Reservation, reservation_id)
+    r = db.get(Reservation, as_uuid(reservation_id))
     if not r:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reservation not found")
     prop = db.get(Property, r.property_id)

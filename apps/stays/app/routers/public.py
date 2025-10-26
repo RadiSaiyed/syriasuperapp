@@ -4,15 +4,50 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Property, Unit, Reservation, UnitAmenity, Review, PropertyImage, UnitBlock, UnitPrice
-from ..schemas import PropertyOut, PropertyDetailOut, UnitOut, SearchAvailabilityIn, SearchAvailabilityOut, AvailableUnitOut
+from ..schemas import PropertyOut, PropertyDetailOut, UnitOut, SearchAvailabilityIn, SearchAvailabilityOut, AvailableUnitOut, SearchFacetsOut, UnitCalendarOut, UnitCalendarDayOut
 
 
 router = APIRouter(tags=["public"])  # no auth required
 
 
 @router.get("/properties", response_model=list[PropertyOut])
-def list_properties(city: str | None = None, type: str | None = None, q: str | None = None, db: Session = Depends(get_db)):
+def list_properties(
+    city: str | None = None,
+    type: str | None = None,
+    q: str | None = None,
+    min_rating: int | None = None,
+    sort_by: str = "rating",
+    sort_order: str = "desc",
+    limit: int = 100,
+    offset: int = 0,
+    min_lat: float | None = None,
+    max_lat: float | None = None,
+    min_lon: float | None = None,
+    max_lon: float | None = None,
+    db: Session = Depends(get_db),
+):
     from sqlalchemy import or_, func
+
+    def _to_float(v: str | None) -> float | None:
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+
+    def _in_bounds(lat: float | None, lon: float | None) -> bool:
+        if any(x is not None for x in (min_lat, max_lat, min_lon, max_lon)):
+            if lat is None or lon is None:
+                return False
+            if min_lat is not None and lat < min_lat:
+                return False
+            if max_lat is not None and lat > max_lat:
+                return False
+            if min_lon is not None and lon < min_lon:
+                return False
+            if max_lon is not None and lon > max_lon:
+                return False
+        return True
+
     query = db.query(Property)
     if city:
         query = query.filter(Property.city == city)
@@ -21,11 +56,10 @@ def list_properties(city: str | None = None, type: str | None = None, q: str | N
     if q:
         like = f"%{q}%"
         query = query.filter(or_(Property.name.ilike(like), Property.description.ilike(like)))
-    props = query.order_by(Property.created_at.desc()).limit(200).all()
-    out: list[PropertyOut] = []
+    props = query.order_by(Property.created_at.desc()).limit(1000).all()
     if not props:
-        return out
-    # Batch rating aggregates to avoid N+1
+        return []
+
     prop_ids = [p.id for p in props]
     aggs = (
         db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
@@ -34,23 +68,59 @@ def list_properties(city: str | None = None, type: str | None = None, q: str | N
         .all()
     )
     rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+    pops = (
+        db.query(Reservation.property_id, func.count(Reservation.id))
+        .filter(Reservation.property_id.in_(prop_ids))
+        .group_by(Reservation.property_id)
+        .all()
+    )
+    pop_map = {pid: int(cnt) for (pid, cnt) in pops}
+
+    rows = []
     for p in props:
+        lat = _to_float(p.latitude)
+        lon = _to_float(p.longitude)
+        if not _in_bounds(lat, lon):
+            continue
         avg, cnt = rating_map.get(p.id, (None, 0))
+        popularity = pop_map.get(p.id, 0)
+        rows.append((p, avg if avg is not None else -1.0, cnt, popularity, lat, lon))
+
+    if min_rating is not None:
+        rows = [r for r in rows if r[1] is not None and r[1] >= float(min_rating)]
+
+    key = (sort_by or "rating").lower()
+    reverse = (sort_order or "desc").lower() == "desc"
+    if key == "rating":
+        rows.sort(key=lambda r: (r[1], r[2], r[3]), reverse=reverse)
+    elif key == "popularity":
+        rows.sort(key=lambda r: (r[3], r[1], r[2]), reverse=reverse)
+    elif key == "name":
+        rows.sort(key=lambda r: (r[0].name or ""), reverse=reverse)
+    elif key == "created":
+        rows.sort(key=lambda r: (r[0].created_at,), reverse=reverse)
+    else:
+        rows.sort(key=lambda r: (r[1], r[2], r[3]), reverse=True)
+
+    sliced = rows[offset: offset + limit]
+    out: list[PropertyOut] = []
+    for (p, avg, cnt, _pop, _lat, _lon) in sliced:
         out.append(PropertyOut(
             id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
             address=p.address, latitude=p.latitude, longitude=p.longitude,
-            rating_avg=avg, rating_count=cnt,
+            rating_avg=(avg if avg != -1.0 else None), rating_count=cnt,
         ))
     return out
 
 
 @router.get("/properties/{property_id}", response_model=PropertyDetailOut)
 def get_property(property_id: str, db: Session = Depends(get_db)):
-    p = db.get(Property, property_id)
+    from ..utils.ids import as_uuid
+    from sqlalchemy import func
+    p = db.get(Property, as_uuid(property_id))
     if not p:
         from fastapi import HTTPException, status
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
-    from sqlalchemy import func
     units = db.query(Unit).filter(Unit.property_id == p.id, Unit.active == True).all()  # noqa: E712
     unit_ids = [u.id for u in units]
     tags_map = {uid: [] for uid in unit_ids}
@@ -59,11 +129,48 @@ def get_property(property_id: str, db: Session = Depends(get_db)):
             tags_map[a.unit_id].append(a.tag)
     imgs = db.query(PropertyImage).filter(PropertyImage.property_id == p.id).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
     avg, cnt = db.query(func.avg(Review.rating), func.count(Review.id)).filter(Review.property_id == p.id).one()
+    # ratings histogram
+    hist_rows = db.query(Review.rating, func.count(Review.id)).filter(Review.property_id == p.id).group_by(Review.rating).all()
+    hist: dict[str, int] = {}
+    for r, c in hist_rows:
+        try:
+            hist[str(int(r))] = int(c)
+        except Exception:
+            pass
+    # similar properties (same city/type)
+    similar_out: list[PropertyOut] = []
+    if p.city:
+        others = db.query(Property).filter(Property.city == p.city, Property.id != p.id)
+        if p.type:
+            others = others.filter(Property.type == p.type)
+        others = others.order_by(Property.created_at.desc()).limit(64).all()
+        if others:
+            opids = [o.id for o in others]
+            oaggs = (
+                db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+                .filter(Review.property_id.in_(opids))
+                .group_by(Review.property_id)
+                .all()
+            )
+            rmap = {pid: (float(a) if a is not None else None, int(c) if c is not None else 0) for (pid, a, c) in oaggs}
+            rows = []
+            for o in others:
+                ravg, rcnt = rmap.get(o.id, (None, 0))
+                rows.append((o, ravg or -1.0, rcnt))
+            rows.sort(key=lambda t: (t[1], t[2], t[0].created_at), reverse=True)
+            for (o, ravg, rcnt) in rows[:6]:
+                similar_out.append(PropertyOut(
+                    id=str(o.id), name=o.name, type=o.type, city=o.city, description=o.description,
+                    address=o.address, latitude=o.latitude, longitude=o.longitude,
+                    rating_avg=(ravg if ravg != -1.0 else None), rating_count=rcnt,
+                ))
     return PropertyDetailOut(
         id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description, address=p.address, latitude=p.latitude, longitude=p.longitude,
         rating_avg=float(avg) if avg is not None else None, rating_count=int(cnt) if cnt is not None else 0,
         units=[UnitOut(id=str(u.id), property_id=str(u.property_id), name=u.name, capacity=u.capacity, total_units=u.total_units, price_cents_per_night=u.price_cents_per_night, min_nights=u.min_nights, cleaning_fee_cents=u.cleaning_fee_cents, active=u.active, amenities=tags_map.get(u.id, [])) for u in units],
         images=[{"id": str(i.id), "url": i.url, "sort_order": i.sort_order} for i in imgs],
+        rating_histogram=hist,
+        similar=similar_out,
     )
 
 
@@ -73,10 +180,18 @@ def _overlaps(a_start, a_end, b_start, b_end) -> bool:
 
 @router.post("/search_availability", response_model=SearchAvailabilityOut)
 def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get_db)):
+    from sqlalchemy import func
     # naive availability: total_units - overlapping reservations
     props_q = db.query(Property)
     if payload.city:
         props_q = props_q.filter(Property.city == payload.city)
+    if payload.property_ids:
+        try:
+            from uuid import UUID
+            ids = [UUID(x) for x in payload.property_ids]
+            props_q = props_q.filter(Property.id.in_(ids))
+        except Exception:
+            pass
     props = props_q.all()
     results: list[AvailableUnitOut] = []
 
@@ -85,7 +200,69 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
         return SearchAvailabilityOut(results=[])
 
     from datetime import timedelta as _td
+
+    def _to_float(v: str | None) -> float | None:
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+
+    def _in_bounds(lat: float | None, lon: float | None) -> bool:
+        if any(x is not None for x in (payload.min_lat, payload.max_lat, payload.min_lon, payload.max_lon)):
+            if lat is None or lon is None:
+                return False
+            if payload.min_lat is not None and lat < payload.min_lat:
+                return False
+            if payload.max_lat is not None and lat > payload.max_lat:
+                return False
+            if payload.min_lon is not None and lon < payload.min_lon:
+                return False
+            if payload.max_lon is not None and lon > payload.max_lon:
+                return False
+        return True
+
+    def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        from math import radians, sin, cos, asin, sqrt
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+        c = 2 * asin(sqrt(a))
+        return 6371.0 * c
+
+    # Preload ratings and popularity for sorting/filters
+    prop_ids = [p.id for p in props]
+    rating_map: dict = {}
+    if prop_ids:
+        aggs = (
+            db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+            .filter(Review.property_id.in_(prop_ids))
+            .group_by(Review.property_id)
+            .all()
+        )
+        rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+    pops = (
+        db.query(Reservation.property_id, func.count(Reservation.id))
+        .filter(Reservation.property_id.in_(prop_ids))
+        .group_by(Reservation.property_id)
+        .all()
+    )
+    pop_map = {pid: int(cnt) for (pid, cnt) in pops}
+
+    # Facet aggregators
+    amenities_counts: dict[str, int] = {}
+    rating_bands: dict[str, int] = {}
+    price_min: int | None = None
+    price_max: int | None = None
+
     for p in props:
+        plat = _to_float(p.latitude)
+        plon = _to_float(p.longitude)
+        if not _in_bounds(plat, plon):
+            continue
+        if payload.min_rating is not None:
+            avg, _cnt = rating_map.get(p.id, (None, 0))
+            if avg is None or avg < float(payload.min_rating):
+                continue
         if payload.property_type and p.type != payload.property_type:
             continue
         units = db.query(Unit).filter(Unit.property_id == p.id, Unit.active == True).all()  # noqa: E712
@@ -108,12 +285,10 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
         for pr in prices:
             prices_by_unit.setdefault(pr.unit_id, {})[pr.date] = pr.price_cents
         for u in units:
-            # Capacity filter quick
             if payload.guests > u.capacity:
                 continue
             if payload.capacity_min is not None and u.capacity < payload.capacity_min:
                 continue
-            # Amenities filter
             if payload.amenities:
                 unit_tags = set(tags_map.get(u.id, []))
                 query_tags = set(payload.amenities)
@@ -123,10 +298,8 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
                 else:
                     if unit_tags.isdisjoint(query_tags):
                         continue
-            # Min nights
             if nights < u.min_nights:
                 continue
-            # Day-by-day availability and pricing
             rs = db.query(Reservation).filter(Reservation.unit_id == u.id, Reservation.status.in_(["created", "confirmed"]))
             res_days = [(r.check_in, r.check_out) for r in rs]
             blks = blocks_by_unit.get(u.id, [])
@@ -134,34 +307,159 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
             min_avail = u.total_units
             total_cost = int(u.cleaning_fee_cents)
             while date_iter < payload.check_out:
-                # reservations overlapping that specific date
                 occ = sum(1 for (ci, co) in res_days if ci <= date_iter and date_iter < co)
-                # blocked units overlapping
                 blk = sum(b.blocked_units for b in blks if b.start_date <= date_iter and date_iter < b.end_date)
                 avail_today = max(0, u.total_units - occ - blk)
                 if avail_today < min_avail:
                     min_avail = avail_today
-                # price for that night
                 price_map = prices_by_unit.get(u.id, {})
                 nightly = price_map.get(date_iter, u.price_cents_per_night)
                 total_cost += int(nightly)
                 date_iter = date_iter + _td(days=1)
             if min_avail <= 0:
                 continue
-            # Price filters based on average nightly rate over the period
             avg_nightly = (total_cost - int(u.cleaning_fee_cents)) / float(nights)
             if payload.min_price_cents is not None and avg_nightly < payload.min_price_cents:
                 continue
             if payload.max_price_cents is not None and avg_nightly > payload.max_price_cents:
                 continue
+            # Track facets
+            unit_tags = tags_map.get(u.id, [])
+            for t in unit_tags:
+                amenities_counts[t] = amenities_counts.get(t, 0) + 1
+            # nightly average is used for price facets
+            nightly_avg_int = int(avg_nightly)
+            price_min = nightly_avg_int if price_min is None else min(price_min, nightly_avg_int)
+            price_max = nightly_avg_int if price_max is None else max(price_max, nightly_avg_int)
+            # rating bands
+            r_avg, _r_cnt = rating_map.get(p.id, (None, 0))
+            if r_avg is not None:
+                band = "5" if r_avg >= 5 else "4+" if r_avg >= 4 else "3+" if r_avg >= 3 else "2+" if r_avg >= 2 else "1+"
+                rating_bands[band] = rating_bands.get(band, 0) + 1
+
+            dist_val = None
+            if payload.center_lat is not None and payload.center_lon is not None and plat is not None and plon is not None:
+                try:
+                    dist_val = _haversine_km(payload.center_lat, payload.center_lon, plat, plon)
+                except Exception:
+                    dist_val = None
+
             results.append(AvailableUnitOut(
                 property_id=str(p.id), property_name=p.name,
                 unit_id=str(u.id), unit_name=u.name,
                 capacity=u.capacity, available_units=min_avail,
                 nightly_price_cents=u.price_cents_per_night, total_cents=int(total_cost),
+                property_rating_avg=rating_map.get(p.id, (None, 0))[0] if rating_map else None,
+                property_rating_count=rating_map.get(p.id, (None, 0))[1] if rating_map else None,
+                distance_km=dist_val,
             ))
-    # Pagination for results
+
+    def _sort_key(item: AvailableUnitOut):
+        if (payload.sort_by or "price") == "price":
+            return (item.total_cents, item.nightly_price_cents)
+        if payload.sort_by == "rating":
+            avg, cnt = rating_map.get(item.property_id, (0.0, 0))
+            return (avg or 0.0, cnt)
+        if payload.sort_by == "popularity":
+            pop = pop_map.get(item.property_id, 0)
+            avg, cnt = rating_map.get(item.property_id, (0.0, 0))
+            return (pop, avg or 0.0, cnt)
+        if payload.sort_by == "best_value":
+            avg, cnt = rating_map.get(item.property_id, (0.0, 0))
+            price_per_night = max(1.0, float(item.total_cents) / float(nights))
+            ratio = (avg or 0.0) / price_per_night
+            return (ratio, cnt)
+        if payload.sort_by == "distance" and payload.center_lat is not None and payload.center_lon is not None:
+            p = next((pp for pp in props if str(pp.id) == item.property_id), None)
+            lat = _to_float(p.latitude) if p else None
+            lon = _to_float(p.longitude) if p else None
+            if lat is None or lon is None:
+                return (float("inf"),)
+            return (_haversine_km(payload.center_lat, payload.center_lon, lat, lon),)
+        if payload.sort_by == "recommended":
+            # Weighted score: rating and popularity per price
+            avg, cnt = rating_map.get(item.property_id, (0.0, 0))
+            pop = pop_map.get(item.property_id, 0)
+            price_per_night = max(1.0, float(item.total_cents) / float(nights))
+            score = (avg or 0.0) * 0.6 + min(pop, 100) / 100.0 * 0.3 + min(cnt, 50) / 50.0 * 0.1
+            return (score / price_per_night,)
+        return (item.total_cents, item.nightly_price_cents)
+
+    reverse = (payload.sort_order or "asc").lower() == "desc"
+    # Group by property if requested (cheapest unit per property)
+    if getattr(payload, "group_by_property", False):
+        best_by_prop: dict[str, AvailableUnitOut] = {}
+        for item in results:
+            cur = best_by_prop.get(item.property_id)
+            if cur is None:
+                best_by_prop[item.property_id] = item
+            else:
+                if item.total_cents < cur.total_cents:
+                    best_by_prop[item.property_id] = item
+                elif item.total_cents == cur.total_cents:
+                    # tie-breaker: higher rating, then lower nightly base
+                    ir = rating_map.get(item.property_id, (0.0, 0))[0] or 0.0
+                    cr = rating_map.get(cur.property_id, (0.0, 0))[0] or 0.0
+                    if ir > cr or (ir == cr and item.nightly_price_cents < cur.nightly_price_cents):
+                        best_by_prop[item.property_id] = item
+        results = list(best_by_prop.values())
+
+    results.sort(key=_sort_key, reverse=reverse)
+
+    # Attach primary image URLs in batch
+    try:
+        from ..utils.ids import as_uuid
+        pid_set = {as_uuid(x.property_id) for x in results}
+        imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(pid_set)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+        first_img: dict = {}
+        for im in imgs:
+            if im.property_id not in first_img:
+                first_img[im.property_id] = im.url
+        for x in results:
+            try:
+                x.property_image_url = first_img.get(as_uuid(x.property_id))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     total = len(results)
     sliced = results[payload.offset: payload.offset + payload.limit]
     next_off = payload.offset + payload.limit if (payload.offset + payload.limit) < total else None
-    return SearchAvailabilityOut(results=sliced, total=total, next_offset=next_off)
+    facets = SearchFacetsOut(
+        amenities_counts=amenities_counts,
+        rating_bands=rating_bands,
+        price_min_cents=price_min,
+        price_max_cents=price_max,
+    )
+    return SearchAvailabilityOut(results=sliced, total=total, next_offset=next_off, facets=facets)
+
+
+@router.get("/units/{unit_id}/calendar", response_model=UnitCalendarOut)
+def unit_calendar(unit_id: str, start: str | None = None, end: str | None = None, db: Session = Depends(get_db)):
+    from datetime import date as _date, timedelta as _td
+    from ..utils.ids import as_uuid
+    u = db.get(Unit, as_uuid(unit_id))
+    if not u:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unit not found")
+    s = _date.fromisoformat(start) if start else _date.today()
+    e = _date.fromisoformat(end) if end else (s + _td(days=30))
+    if e <= s:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid range")
+    rs = db.query(Reservation).filter(Reservation.unit_id == u.id, Reservation.status.in_(["created", "confirmed"]))
+    res_days = [(r.check_in, r.check_out) for r in rs]
+    blocks = db.query(UnitBlock).filter(UnitBlock.unit_id == u.id).all()
+    prices = db.query(UnitPrice).filter(UnitPrice.unit_id == u.id, UnitPrice.date >= s, UnitPrice.date < e).all()
+    price_map = {p.date: p.price_cents for p in prices}
+    days: list[UnitCalendarDayOut] = []
+    d = s
+    while d < e:
+        occ = sum(1 for (ci, co) in res_days if ci <= d and d < co)
+        blk = sum(b.blocked_units for b in blocks if b.start_date <= d and d < b.end_date)
+        avail_today = max(0, u.total_units - occ - blk)
+        price_cents = int(price_map.get(d, u.price_cents_per_night))
+        days.append(UnitCalendarDayOut(date=d, available_units=avail_today, price_cents=price_cents))
+        d = d + _td(days=1)
+    return UnitCalendarOut(unit_id=str(u.id), days=days)

@@ -75,6 +75,8 @@ class PropertyImageOut(BaseModel):
 class PropertyDetailOut(PropertyOut):
     units: List[UnitOut]
     images: List[PropertyImageOut] = []
+    rating_histogram: dict[str, int] = {}
+    similar: List["PropertyOut"] = []
 
 
 class SearchAvailabilityIn(BaseModel):
@@ -88,6 +90,21 @@ class SearchAvailabilityIn(BaseModel):
     property_type: Optional[Literal["hotel", "apartment"]] = None
     amenities: Optional[List[str]] = None
     amenities_mode: Literal["any", "all"] = "any"
+    # Booking-like enhancements
+    sort_by: Literal["price", "rating", "popularity", "distance"] = "price"
+    sort_order: Literal["asc", "desc"] = "asc"
+    center_lat: Optional[float] = None
+    center_lon: Optional[float] = None
+    min_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    # Optional map bounds (if provided, filters properties within box)
+    min_lat: Optional[float] = None
+    max_lat: Optional[float] = None
+    min_lon: Optional[float] = None
+    max_lon: Optional[float] = None
+    # Optional explicit property filter
+    property_ids: Optional[List[str]] = None
+    # Aggregate one result per property (cheapest unit)
+    group_by_property: bool = False
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -101,12 +118,24 @@ class AvailableUnitOut(BaseModel):
     available_units: int
     nightly_price_cents: int
     total_cents: int
+    property_image_url: Optional[str] = None
+    property_rating_avg: Optional[float] = None
+    property_rating_count: Optional[int] = None
+    distance_km: Optional[float] = None
+
+
+class SearchFacetsOut(BaseModel):
+    amenities_counts: dict[str, int] = {}
+    rating_bands: dict[str, int] = {}
+    price_min_cents: Optional[int] = None
+    price_max_cents: Optional[int] = None
 
 
 class SearchAvailabilityOut(BaseModel):
     results: List[AvailableUnitOut]
     total: Optional[int] = None
     next_offset: Optional[int] = None
+    facets: Optional[SearchFacetsOut] = None
 
 
 class ReservationCreateIn(BaseModel):
@@ -202,3 +231,14 @@ class UnitPriceOut(BaseModel):
 
 class ReviewsListOut(BaseModel):
     reviews: List[ReviewOut]
+
+
+class UnitCalendarDayOut(BaseModel):
+    date: date
+    available_units: int
+    price_cents: int
+
+
+class UnitCalendarOut(BaseModel):
+    unit_id: str
+    days: List[UnitCalendarDayOut]
