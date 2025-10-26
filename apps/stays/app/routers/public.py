@@ -338,6 +338,7 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
     rating_bands: dict[str, int] = {}
     price_min: int | None = None
     price_max: int | None = None
+    price_hist_data: list[int] = []
 
     for p in props:
         plat = _to_float(p.latitude)
@@ -425,6 +426,7 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
             nightly_avg_int = int(avg_nightly)
             price_min = nightly_avg_int if price_min is None else min(price_min, nightly_avg_int)
             price_max = nightly_avg_int if price_max is None else max(price_max, nightly_avg_int)
+            price_hist_data.append(nightly_avg_int)
             # rating bands
             r_avg, _r_cnt = rating_map.get(p.id, (None, 0))
             if r_avg is not None:
@@ -537,11 +539,35 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
     total = len(results)
     sliced = results[payload.offset: payload.offset + payload.limit]
     next_off = payload.offset + payload.limit if (payload.offset + payload.limit) < total else None
+    # Build price histogram (5 buckets) if range available
+    price_hist: dict[str, int] = {}
+    try:
+        if price_min is not None and price_max is not None and price_max >= price_min:
+            buckets = 5
+            width = max(1, (price_max - price_min) // buckets)
+            edges = [price_min + i * width for i in range(buckets)]
+            edges.append(price_max + 1)
+            counts = [0] * buckets
+            for v in price_hist_data:
+                # find bucket
+                idx = 0
+                while idx < buckets and not (edges[idx] <= v < edges[idx+1]):
+                    idx += 1
+                if idx >= buckets:
+                    idx = buckets - 1
+                counts[idx] += 1
+            for i in range(buckets):
+                label = f"{edges[i]}-{edges[i+1]-1}"
+                price_hist[label] = counts[i]
+    except Exception:
+        price_hist = {}
+
     facets = SearchFacetsOut(
         amenities_counts=amenities_counts,
         rating_bands=rating_bands,
         price_min_cents=price_min,
         price_max_cents=price_max,
+        price_histogram=price_hist,
     )
     return SearchAvailabilityOut(results=sliced, total=total, next_offset=next_off, facets=facets)
 

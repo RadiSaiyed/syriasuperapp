@@ -136,6 +136,7 @@ class SearchFacetsOut(BaseModel):
     rating_bands: dict[str, int] = {}
     price_min_cents: Optional[int] = None
     price_max_cents: Optional[int] = None
+    price_histogram: dict[str, int] = {}
 
 
 class SearchAvailabilityOut(BaseModel):
