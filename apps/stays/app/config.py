@@ -29,9 +29,11 @@ class Settings:
     RATE_LIMIT_AUTH_BOOST: int = int(os.getenv("RATE_LIMIT_AUTH_BOOST", "2"))
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     RATE_LIMIT_REDIS_PREFIX: str = os.getenv("RATE_LIMIT_REDIS_PREFIX", "rl_stays")
-    # Caching (simple in-memory)
+    # Caching
     CACHE_ENABLED: bool = env_bool("CACHE_ENABLED", default=True)
     CACHE_DEFAULT_TTL_SECS: int = int(os.getenv("CACHE_DEFAULT_TTL_SECS", "60"))
+    CACHE_BACKEND: str = os.getenv("CACHE_BACKEND", "memory")  # memory|redis
+    CACHE_REDIS_URL: str = os.getenv("CACHE_REDIS_URL", "redis://redis:6379/0")
     CACHE_PREWARM: bool = env_bool("CACHE_PREWARM", default=True)
     # OTP
     OTP_MODE: str = os.getenv("OTP_MODE", "dev")

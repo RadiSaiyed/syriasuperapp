@@ -814,7 +814,11 @@ def top_properties(city: str | None = None, limit: int = 12, db: Session = Depen
     if response is not None:
         try:
             from ..utils.http_cache import compute_etag as _ce
-            response.headers["ETag"] = _ce([x.model_dump() for x in out])
+            etag = _ce([x.model_dump() for x in out])
+            inm = request.headers.get("if-none-match") if request is not None else None
+            response.headers["ETag"] = etag
+            if inm and inm == etag:
+                return Response(status_code=304)
             response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
             response.headers["Vary"] = "Authorization"
         except Exception:
@@ -900,7 +904,7 @@ def property_calendar(property_id: str, start: str | None = None, end: str | Non
 
 
 @router.get("/suggest", response_model=SuggestOut)
-def suggest(q: str, response: Response, limit: int = 10, db: Session = Depends(get_db)):
+def suggest(request: Request, response: Response, q: str, limit: int = 10, db: Session = Depends(get_db)):
     from sqlalchemy import or_, func
     q = (q or "").strip()
     if not q:
@@ -977,7 +981,11 @@ def suggest(q: str, response: Response, limit: int = 10, db: Session = Depends(g
             pass
     try:
         from ..utils.http_cache import compute_etag as _ce
-        response.headers["ETag"] = _ce([x.model_dump() for x in items])
+        etag = _ce([x.model_dump() for x in items])
+        inm = request.headers.get("if-none-match")
+        response.headers["ETag"] = etag
+        if inm and inm == etag:
+            return Response(status_code=304)
     except Exception:
         pass
     try:
@@ -988,7 +996,7 @@ def suggest(q: str, response: Response, limit: int = 10, db: Session = Depends(g
 
 
 @router.get("/cities/popular", response_model=list[CityPopularOut])
-def popular_cities(response: Response, limit: int = 8, db: Session = Depends(get_db)):
+def popular_cities(request: Request, response: Response, limit: int = 8, db: Session = Depends(get_db)):
     from sqlalchemy import func
     if settings.CACHE_ENABLED:
         ck = ("cities_popular", int(limit))
@@ -1047,7 +1055,11 @@ def popular_cities(response: Response, limit: int = 8, db: Session = Depends(get
             pass
     try:
         from ..utils.http_cache import compute_etag as _ce
-        response.headers["ETag"] = _ce([x.model_dump() if hasattr(x, "model_dump") else x.__dict__ for x in out])
+        etag = _ce([x.model_dump() if hasattr(x, "model_dump") else x.__dict__ for x in out])
+        inm = request.headers.get("if-none-match")
+        response.headers["ETag"] = etag
+        if inm and inm == etag:
+            return Response(status_code=304)
         response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
     except Exception:
         pass
@@ -1120,7 +1132,11 @@ def properties_nearby(lat: float, lon: float, response: Response, radius_km: flo
         ))
     try:
         from ..utils.http_cache import compute_etag as _ce
-        response.headers["ETag"] = _ce([x.model_dump() for x in out])
+        etag = _ce([x.model_dump() for x in out])
+        inm = request.headers.get("if-none-match") if request is not None else None
+        response.headers["ETag"] = etag
+        if inm and inm == etag:
+            return Response(status_code=304)
         response.headers["Cache-Control"] = "public, max-age=60"
         response.headers["Vary"] = "Authorization"
     except Exception:
