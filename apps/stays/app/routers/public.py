@@ -1,5 +1,5 @@
 from datetime import timedelta
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -25,6 +25,7 @@ def list_properties(
     min_lon: float | None = None,
     max_lon: float | None = None,
     db: Session = Depends(get_db),
+    request: Request = None,
 ):
     from sqlalchemy import or_, func
 
@@ -76,6 +77,19 @@ def list_properties(
     )
     pop_map = {pid: int(cnt) for (pid, cnt) in pops}
 
+    # Favorites for optional user
+    fav_map: dict = {}
+    try:
+        if request is not None:
+            from ..auth import try_get_user
+            user = try_get_user(request, db)
+            if user:
+                from ..models import FavoriteProperty
+                favs = db.query(FavoriteProperty.property_id).filter(FavoriteProperty.user_id == user.id, FavoriteProperty.property_id.in_(prop_ids)).all()
+                fav_map = {pid: True for (pid,) in favs}
+    except Exception:
+        pass
+
     rows = []
     for p in props:
         lat = _to_float(p.latitude)
@@ -109,6 +123,7 @@ def list_properties(
             id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
             address=p.address, latitude=p.latitude, longitude=p.longitude,
             rating_avg=(avg if avg != -1.0 else None), rating_count=cnt,
+            is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
         ))
     return out
 
@@ -179,7 +194,7 @@ def _overlaps(a_start, a_end, b_start, b_end) -> bool:
 
 
 @router.post("/search_availability", response_model=SearchAvailabilityOut)
-def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get_db)):
+def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get_db), request: Request = None):
     from sqlalchemy import func
     # naive availability: total_units - overlapping reservations
     props_q = db.query(Property)
@@ -248,6 +263,18 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
     )
     pop_map = {pid: int(cnt) for (pid, cnt) in pops}
 
+    fav_map: dict = {}
+    try:
+        if request is not None:
+            from ..auth import try_get_user
+            user = try_get_user(request, db)
+            if user:
+                from ..models import FavoriteProperty
+                favs = db.query(FavoriteProperty.property_id).filter(FavoriteProperty.user_id == user.id, FavoriteProperty.property_id.in_(prop_ids)).all()
+                fav_map = {pid: True for (pid,) in favs}
+    except Exception:
+        pass
+
     # Facet aggregators
     amenities_counts: dict[str, int] = {}
     rating_bands: dict[str, int] = {}
@@ -298,6 +325,15 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
                 else:
                     if unit_tags.isdisjoint(query_tags):
                         continue
+            # Popular UX filters via amenities
+            if payload.free_cancellation:
+                norm_tags = {t.replace('-', '_').lower() for t in tags_map.get(u.id, [])}
+                if 'free_cancellation' not in norm_tags:
+                    continue
+            if payload.breakfast_included:
+                norm_tags = {t.replace('-', '_').lower() for t in tags_map.get(u.id, [])}
+                if 'breakfast' not in norm_tags and 'breakfast_included' not in norm_tags:
+                    continue
             if nights < u.min_nights:
                 continue
             rs = db.query(Reservation).filter(Reservation.unit_id == u.id, Reservation.status.in_(["created", "confirmed"]))
@@ -352,6 +388,7 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
                 property_rating_avg=rating_map.get(p.id, (None, 0))[0] if rating_map else None,
                 property_rating_count=rating_map.get(p.id, (None, 0))[1] if rating_map else None,
                 distance_km=dist_val,
+                is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
             ))
 
     def _sort_key(item: AvailableUnitOut):

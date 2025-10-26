@@ -41,6 +41,7 @@ class PropertyOut(BaseModel):
     longitude: Optional[str] = None
     rating_avg: Optional[float] = None
     rating_count: Optional[int] = None
+    is_favorite: Optional[bool] = None
 
 
 class UnitCreateIn(BaseModel):
@@ -96,6 +97,9 @@ class SearchAvailabilityIn(BaseModel):
     center_lat: Optional[float] = None
     center_lon: Optional[float] = None
     min_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    # Popular UX filters mapped to amenities
+    free_cancellation: Optional[bool] = None
+    breakfast_included: Optional[bool] = None
     # Optional map bounds (if provided, filters properties within box)
     min_lat: Optional[float] = None
     max_lat: Optional[float] = None
