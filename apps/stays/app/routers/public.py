@@ -47,6 +47,8 @@ def list_properties(
     include_price_preview: bool = False,
     check_in: str | None = None,
     check_out: str | None = None,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
     db: Session = Depends(get_db),
 ):
     from sqlalchemy import or_, func
@@ -142,6 +144,16 @@ def list_properties(
         rows.sort(key=lambda r: (r[0].name or ""), reverse=reverse)
     elif key == "created":
         rows.sort(key=lambda r: (r[0].created_at,), reverse=reverse)
+    elif key == "distance" and center_lat is not None and center_lon is not None:
+        from math import radians, sin, cos, asin, sqrt
+        def _hv(lat, lon):
+            if lat is None or lon is None:
+                return float("inf")
+            dlat = radians(lat - center_lat)
+            dlon = radians(lon - center_lon)
+            a = sin(dlat/2)**2 + cos(radians(center_lat)) * cos(radians(lat)) * sin(dlon/2)**2
+            return 2 * asin(sqrt(a)) * 6371.0
+        rows.sort(key=lambda r: (_hv(r[4], r[5]), r[1] if r[1] is not None else -1.0), reverse=reverse)
     else:
         rows.sort(key=lambda r: (r[1], r[2], r[3]), reverse=True)
 
@@ -214,6 +226,13 @@ def list_properties(
             preview_map = {}
 
     for (p, avg, cnt, _pop, _lat, _lon) in sliced:
+        dist_val = None
+        if center_lat is not None and center_lon is not None and _lat is not None and _lon is not None:
+            from math import radians, sin, cos, asin, sqrt
+            dlat = radians(_lat - center_lat)
+            dlon = radians(_lon - center_lon)
+            a = sin(dlat/2)**2 + cos(radians(center_lat)) * cos(radians(_lat)) * sin(dlon/2)**2
+            dist_val = 2 * asin(sqrt(a)) * 6371.0
         out.append(PropertyOut(
             id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
             address=p.address, latitude=p.latitude, longitude=p.longitude,
@@ -223,6 +242,7 @@ def list_properties(
             favorites_count=fav_count_map.get(p.id) if fav_count_map else None,
             price_preview_total_cents=preview_map.get(p.id, (None, None))[0] if preview_map else None,
             price_preview_nightly_cents=preview_map.get(p.id, (None, None))[1] if preview_map else None,
+            distance_km=dist_val,
         ))
     # Pagination headers
     if response is not None and request is not None:

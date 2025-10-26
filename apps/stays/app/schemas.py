@@ -46,6 +46,7 @@ class PropertyOut(BaseModel):
     favorites_count: Optional[int] = None
     price_preview_total_cents: Optional[int] = None
     price_preview_nightly_cents: Optional[int] = None
+    distance_km: Optional[float] = None
 
 
 class UnitCreateIn(BaseModel):

@@ -90,6 +90,102 @@ def create_app() -> FastAPI:
     app.include_router(reviews_router.router)
     app.include_router(webhooks_router.router)
     app.include_router(payments_webhook_router.router)
+    
+    if settings.CACHE_ENABLED and getattr(settings, "CACHE_PREWARM", False):
+        @app.on_event("startup")
+        async def _prewarm_caches():
+            try:
+                from .utils.cache import cache
+                from sqlalchemy import func
+                from .database import SessionLocal
+                from .models import Property, Unit, Review, Reservation, PropertyImage
+                from .schemas import CityPopularOut, PropertyOut
+                limit_cities = 8
+                limit_props = 12
+                with SessionLocal() as db:
+                    # Popular cities
+                    rows = (
+                        db.query(Property.city, func.count(Property.id))
+                        .filter(Property.city.isnot(None))
+                        .group_by(Property.city)
+                        .order_by(func.count(Property.id).desc())
+                        .limit(limit_cities)
+                        .all()
+                    )
+                    cities_out = []
+                    for (city, cnt) in rows:
+                        if not city:
+                            continue
+                        avg = (
+                            db.query(func.avg(Review.rating))
+                            .filter(Review.property_id.in_(db.query(Property.id).filter(Property.city == city)))
+                            .scalar()
+                        )
+                        avg_rating = float(avg) if avg is not None else None
+                        prop_ids = [pid for (pid,) in db.query(Property.id).filter(Property.city == city).all()]
+                        min_price = None
+                        if prop_ids:
+                            unit_min = db.query(func.min(Unit.price_cents_per_night)).filter(Unit.property_id.in_(prop_ids)).scalar()
+                            min_price = int(unit_min) if unit_min is not None else None
+                        img = (
+                            db.query(PropertyImage)
+                            .join(Property, Property.id == PropertyImage.property_id)
+                            .filter(Property.city == city)
+                            .order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc())
+                            .first()
+                        )
+                        image_url = img.url if img else None
+                        cities_out.append(CityPopularOut(city=city, property_count=int(cnt), avg_rating=avg_rating, image_url=image_url, min_price_cents=min_price))
+                    cache.set(("cities_popular", limit_cities), cities_out, settings.CACHE_DEFAULT_TTL_SECS)
+
+                    # Top properties: global and per top 3 cities
+                    props = db.query(Property).order_by(Property.created_at.desc()).limit(2000).all()
+                    if props:
+                        prop_ids = [p.id for p in props]
+                        aggs = (
+                            db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+                            .filter(Review.property_id.in_(prop_ids))
+                            .group_by(Review.property_id)
+                            .all()
+                        )
+                        rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+                        pops = (
+                            db.query(Reservation.property_id, func.count(Reservation.id))
+                            .filter(Reservation.property_id.in_(prop_ids))
+                            .group_by(Reservation.property_id)
+                            .all()
+                        )
+                        pop_map = {pid: int(cnt) for (pid, cnt) in pops}
+                        imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(prop_ids)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+                        first_img: dict = {}
+                        for im in imgs:
+                            if im.property_id not in first_img:
+                                first_img[im.property_id] = im.url
+                        def build_top(props_list):
+                            rows2 = []
+                            for p in props_list:
+                                ravg, rcnt = rating_map.get(p.id, (0.0, 0))
+                                pop = pop_map.get(p.id, 0)
+                                score = (ravg or 0.0) * 0.7 + min(pop, 100) / 100.0 * 0.3
+                                rows2.append((p, score, ravg or None, rcnt))
+                            rows2.sort(key=lambda t: (t[1], t[2] or 0.0, t[3]), reverse=True)
+                            out: list[PropertyOut] = []
+                            for (p, _score, ravg, rcnt) in rows2[:limit_props]:
+                                out.append(PropertyOut(
+                                    id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
+                                    address=p.address, latitude=p.latitude, longitude=p.longitude,
+                                    rating_avg=ravg, rating_count=rcnt, image_url=first_img.get(p.id),
+                                ))
+                            return out
+                        # Global
+                        cache.set(("top_props", "_all_", limit_props), build_top(props), settings.CACHE_DEFAULT_TTL_SECS)
+                        # Top 3 cities
+                        top3 = [c for (c, _cnt) in rows[:3]] if rows else []
+                        for city in top3:
+                            city_props = [p for p in props if p.city == city]
+                            cache.set(("top_props", city or "_all_", limit_props), build_top(city_props), settings.CACHE_DEFAULT_TTL_SECS)
+            except Exception:
+                pass
     return app
 
 

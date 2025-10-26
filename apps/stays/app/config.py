@@ -32,6 +32,7 @@ class Settings:
     # Caching (simple in-memory)
     CACHE_ENABLED: bool = env_bool("CACHE_ENABLED", default=True)
     CACHE_DEFAULT_TTL_SECS: int = int(os.getenv("CACHE_DEFAULT_TTL_SECS", "60"))
+    CACHE_PREWARM: bool = env_bool("CACHE_PREWARM", default=True)
     # OTP
     OTP_MODE: str = os.getenv("OTP_MODE", "dev")
     OTP_TTL_SECS: int = int(os.getenv("OTP_TTL_SECS", "300"))
