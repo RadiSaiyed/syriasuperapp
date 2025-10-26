@@ -651,6 +651,11 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
 @router.get("/properties/top", response_model=list[PropertyOut])
 def top_properties(city: str | None = None, limit: int = 12, db: Session = Depends(get_db), request: Request = None):
     from sqlalchemy import func
+    if settings.CACHE_ENABLED:
+        ck = ("top_props", city or "_all_", int(limit))
+        c = cache.get(ck)
+        if c is not None:
+            return c
     query = db.query(Property)
     if city:
         query = query.filter(Property.city == city)
@@ -707,6 +712,11 @@ def top_properties(city: str | None = None, limit: int = 12, db: Session = Depen
             rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
             image_url=first_img.get(p.id),
         ))
+    if settings.CACHE_ENABLED:
+        try:
+            cache.set(ck, out, settings.CACHE_DEFAULT_TTL_SECS)
+        except Exception:
+            pass
     return out
 
 
@@ -793,6 +803,11 @@ def suggest(q: str, limit: int = 10, db: Session = Depends(get_db)):
     q = (q or "").strip()
     if not q:
         return SuggestOut(items=[])
+    if settings.CACHE_ENABLED:
+        cache_key = ("suggest", q.lower(), int(limit))
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return SuggestOut(items=cached)
     like = f"%{q}%"
     items: list[SuggestItemOut] = []
     # Top cities by property count matching query
@@ -852,12 +867,23 @@ def suggest(q: str, limit: int = 10, db: Session = Depends(get_db)):
     except Exception:
         pass
     # Trim to limit
-    return SuggestOut(items=items[:limit])
+    items = items[:limit]
+    if settings.CACHE_ENABLED:
+        try:
+            cache.set(cache_key, items, settings.CACHE_DEFAULT_TTL_SECS // 2 or 30)
+        except Exception:
+            pass
+    return SuggestOut(items=items)
 
 
 @router.get("/cities/popular", response_model=list[CityPopularOut])
 def popular_cities(limit: int = 8, db: Session = Depends(get_db)):
     from sqlalchemy import func
+    if settings.CACHE_ENABLED:
+        ck = ("cities_popular", int(limit))
+        c = cache.get(ck)
+        if c is not None:
+            return c
     rows = (
         db.query(Property.city, func.count(Property.id))
         .filter(Property.city.isnot(None))
@@ -903,6 +929,11 @@ def popular_cities(limit: int = 8, db: Session = Depends(get_db)):
         except Exception:
             image_url = None
         out.append(CityPopularOut(city=city, property_count=int(cnt), avg_rating=avg_rating, image_url=image_url, min_price_cents=min_price))
+    if settings.CACHE_ENABLED:
+        try:
+            cache.set(ck, out, settings.CACHE_DEFAULT_TTL_SECS)
+        except Exception:
+            pass
     return out
 
 

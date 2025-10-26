@@ -19,22 +19,33 @@ API (MVP)
   - `POST /auth/request_otp` — request OTP (dev: always 123456)
   - `POST /auth/verify_otp` — create user if needed, return JWT
 - Public
-  - `GET  /properties` — list properties (filters: `city`, `type`, `q`; includes `rating_avg`, `rating_count`, address/geo when available)
-    - Extras: `min_rating`, sorting `sort_by=rating|popularity|created|name`, `sort_order=asc|desc`, pagination `limit`, `offset`, optional map bounds `min_lat,max_lat,min_lon,max_lon`.
+  - `GET  /properties` — list properties (filters: `city`, `type`, `q`; returns rating and geo when available)
+    - Filters: `min_rating`, map bounds `min_lat,max_lat,min_lon,max_lon`
+    - Sorting: `sort_by=rating|popularity|created|name|distance` (`distance` requires `center_lat,center_lon`), `sort_order=asc|desc`
+    - Pagination: `limit`, `offset`; headers include `X-Total-Count` and RFC5988 `Link` with `prev`/`next`
+    - Favorites: if `Authorization: Bearer <jwt>` provided, items include `is_favorite`; `include_favorites_count=true` adds `favorites_count`
+    - Price preview: `include_price_preview=true&check_in=YYYY-MM-DD&check_out=YYYY-MM-DD` adds `price_preview_total_cents` and `price_preview_nightly_cents`
   - `GET  /properties/{id}` — property details with units, images, aggregated ratings
     - Extras: `rating_histogram`, `similar` (top 6 similar properties in same city/type)
+  - `GET  /properties/{id}/calendar` — property-level calendar (sum of available units and min nightly price per day)
+    - Query: `start`, `end` (ISO date); defaults to next 30 days
   - `POST /search_availability` — search by city / dates / guests
-    - Filters: `min_price_cents`, `max_price_cents`, `capacity_min`, `property_type`, `amenities`, `amenities_mode=any|all`, `min_rating`, optional `property_ids`
-    - Map: optional bounds `min_lat,max_lat,min_lon,max_lon`, or distance sorting requires `center_lat,center_lon`
+    - Filters: `min_price_cents`, `max_price_cents`, `capacity_min`, `property_type`, `amenities`, `amenities_mode=any|all`, `min_rating`, `property_ids`
+      - UX policy filters mapped to amenities: `free_cancellation`, `breakfast_included`, `non_refundable`, `pay_at_property`, `no_prepayment`
+    - Map: optional bounds `min_lat,max_lat,min_lon,max_lon`; distance sorting requires `center_lat,center_lon`
     - Sorting: `sort_by=price|rating|popularity|distance|best_value|recommended`, `sort_order=asc|desc`
     - Grouping: `group_by_property=true` returns cheapest unit per property
-    - Result extras: `property_image_url`, `property_rating_avg`, `property_rating_count`, `distance_km`
-    - Facets: `amenities_counts`, `rating_bands`, `price_min_cents`, `price_max_cents`
+    - Result extras: `property_image_url`, `property_rating_avg`, `property_rating_count`, `distance_km`, `badges`
+      - Policy flags on results: `policy_free_cancellation`, `policy_non_refundable`, `policy_no_prepayment`, `policy_pay_at_property`
+    - Facets: `amenities_counts`, `rating_bands`, `price_min_cents`, `price_max_cents`, `price_histogram`
     - Pagination: `limit`, `offset`; response includes `total`, `next_offset`.
   - `GET  /units/{unit_id}/calendar` — per-day availability and price for a date range
     - Query: `start`, `end` (ISO date). Defaults to next 30 days.
     - Response: `{ unit_id, days: [{date, available_units, price_cents}] }`
     - Availability accounts for maintenance blocks (unit‑blocking) and dynamic daily prices; total includes cleaning fee.
+  - `GET  /properties/top` — recommended properties (by rating + popularity), optional `city`, `limit`
+  - `GET  /properties/nearby` — nearby properties by radius: `lat`, `lon`, `radius_km`, `limit`
+  - `GET  /suggest` — search suggestions for cities and properties: `q`, optional `limit`
 - Host (property owner)
   - `POST /host/properties` — create property
   - `GET  /host/properties` — list my properties
@@ -60,7 +71,7 @@ API (MVP)
 - Favorites
   - `POST /properties/{id}/favorite` — add property to favorites
   - `DELETE /properties/{id}/favorite` — remove from favorites
-  - `GET  /properties/favorites` — list my favorite properties
+  - `GET  /properties/favorites` — list my favorite properties (with `rating_avg`, `rating_count`, `image_url`, and `is_favorite=true`)
 - Reviews
   - `POST /properties/{id}/reviews` — add review (rating 1-5, comment)
   - `GET  /properties/{id}/reviews` — list reviews
