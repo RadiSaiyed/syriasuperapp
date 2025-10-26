@@ -246,3 +246,16 @@ class UnitCalendarDayOut(BaseModel):
 class UnitCalendarOut(BaseModel):
     unit_id: str
     days: List[UnitCalendarDayOut]
+
+
+class SuggestItemOut(BaseModel):
+    type: Literal["city", "property"]
+    id: Optional[str] = None
+    name: str
+    city: Optional[str] = None
+    rating_avg: Optional[float] = None
+    image_url: Optional[str] = None
+
+
+class SuggestOut(BaseModel):
+    items: List[SuggestItemOut]

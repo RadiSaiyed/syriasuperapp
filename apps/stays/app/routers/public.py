@@ -4,7 +4,19 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Property, Unit, Reservation, UnitAmenity, Review, PropertyImage, UnitBlock, UnitPrice
-from ..schemas import PropertyOut, PropertyDetailOut, UnitOut, SearchAvailabilityIn, SearchAvailabilityOut, AvailableUnitOut, SearchFacetsOut, UnitCalendarOut, UnitCalendarDayOut
+from ..schemas import (
+    PropertyOut,
+    PropertyDetailOut,
+    UnitOut,
+    SearchAvailabilityIn,
+    SearchAvailabilityOut,
+    AvailableUnitOut,
+    SearchFacetsOut,
+    UnitCalendarOut,
+    UnitCalendarDayOut,
+    SuggestOut,
+    SuggestItemOut,
+)
 
 
 router = APIRouter(tags=["public"])  # no auth required
@@ -500,3 +512,71 @@ def unit_calendar(unit_id: str, start: str | None = None, end: str | None = None
         days.append(UnitCalendarDayOut(date=d, available_units=avail_today, price_cents=price_cents))
         d = d + _td(days=1)
     return UnitCalendarOut(unit_id=str(u.id), days=days)
+
+
+@router.get("/suggest", response_model=SuggestOut)
+def suggest(q: str, limit: int = 10, db: Session = Depends(get_db)):
+    from sqlalchemy import or_, func
+    q = (q or "").strip()
+    if not q:
+        return SuggestOut(items=[])
+    like = f"%{q}%"
+    items: list[SuggestItemOut] = []
+    # Top cities by property count matching query
+    try:
+        cities = (
+            db.query(Property.city, func.count(Property.id))
+            .filter(Property.city.isnot(None), Property.city.ilike(like))
+            .group_by(Property.city)
+            .order_by(func.count(Property.id).desc())
+            .limit(max(1, limit // 2))
+            .all()
+        )
+        for (city, _cnt) in cities:
+            if city:
+                items.append(SuggestItemOut(type="city", name=city))
+    except Exception:
+        pass
+    # Properties matching by name/description
+    try:
+        props = (
+            db.query(Property)
+            .filter(or_(Property.name.ilike(like), Property.description.ilike(like)))
+            .order_by(Property.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        if props:
+            prop_ids = [p.id for p in props]
+            aggs = (
+                db.query(Review.property_id, func.avg(Review.rating))
+                .filter(Review.property_id.in_(prop_ids))
+                .group_by(Review.property_id)
+                .all()
+            )
+            rmap = {pid: (float(avg) if avg is not None else None) for (pid, avg) in aggs}
+            imgs = (
+                db.query(PropertyImage)
+                .filter(PropertyImage.property_id.in_(prop_ids))
+                .order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc())
+                .all()
+            )
+            first_img: dict = {}
+            for im in imgs:
+                if im.property_id not in first_img:
+                    first_img[im.property_id] = im.url
+            for p in props:
+                items.append(
+                    SuggestItemOut(
+                        type="property",
+                        id=str(p.id),
+                        name=p.name,
+                        city=p.city,
+                        rating_avg=rmap.get(p.id),
+                        image_url=first_img.get(p.id),
+                    )
+                )
+    except Exception:
+        pass
+    # Trim to limit
+    return SuggestOut(items=items[:limit])
