@@ -46,9 +46,11 @@ API (MVP)
     - Query: `start`, `end` (ISO date). Defaults to next 30 days.
     - Response: `{ unit_id, days: [{date, available_units, price_cents}] }`
     - Availability accounts for maintenance blocks (unit‑blocking) and dynamic daily prices; total includes cleaning fee.
-  - `GET  /properties/top` — recommended properties (by rating + popularity), optional `city`, `limit`
-  - `GET  /properties/nearby` — nearby properties by radius: `lat`, `lon`, `radius_km`, `limit`
+  - `GET  /properties/top` — recommended properties (by rating + popularity), optional `city`, `rating_band`, `limit`
+  - `GET  /properties/nearby` — nearby properties by radius: `lat`, `lon`, optional `rating_band`, `radius_km`, `limit`
   - `GET  /suggest` — search suggestions for cities and properties: `q`, optional `limit`
+  - `GET  /cities/popular` — popular cities by property count
+    - Response includes `avg_rating`, a representative `image_url`, `min_price_cents`, and `rating_bands` (counts of properties by average rating band: `5`, `4+`, `3+`, `2+`, `1+`).
   - Caching & headers:
     - `/cities/popular`, `/properties/top`, `/properties/nearby`, `/suggest` set `Cache-Control: public, max-age=...` and ETag headers; some vary by `Authorization`.
 - Host (property owner)
@@ -92,6 +94,7 @@ API (MVP)
 Notes
 - Availability is computed by subtracting overlapping reservations from `total_units` for a unit.
 - Rate limiting supported (memory/Redis) via env.
+  - Public responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`; on 429, `Retry-After` is returned.
 - Notifications: events are emitted to log or Redis (`NOTIFY_MODE=log|redis`, `NOTIFY_REDIS_CHANNEL=stays.events`):
   - `reservation.created`, `reservation.confirmed`, `reservation.canceled`, `review.created`
 - Payments integration: on reservation create, service calls Payments `/internal/requests` (HMAC‑signed) to create a Payment Request from host→guest. Requires in `.env`:

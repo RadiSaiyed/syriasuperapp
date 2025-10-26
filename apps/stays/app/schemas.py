@@ -280,6 +280,7 @@ class CityPopularOut(BaseModel):
     avg_rating: Optional[float] = None
     image_url: Optional[str] = None
     min_price_cents: Optional[int] = None
+    rating_bands: dict[str, int] = {}
 
 
 class SuggestItemOut(BaseModel):

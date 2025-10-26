@@ -6,6 +6,7 @@ from ..database import get_db
 from ..models import Property, Unit, Reservation, UnitAmenity, Review, PropertyImage, UnitBlock, UnitPrice, FavoriteProperty
 from ..config import settings
 from ..utils.cache import cache
+from ..utils.ratelimit_simple import rate_limit_dependency
 from ..schemas import (
     PropertyOut,
     PropertyDetailOut,
@@ -35,6 +36,7 @@ def list_properties(
     type: str | None = None,
     q: str | None = None,
     min_rating: int | None = None,
+    rating_band: str | None = None,  # e.g., "5", "4+", "3+"
     sort_by: str = "rating",
     sort_order: str = "desc",
     limit: int = 100,
@@ -57,6 +59,7 @@ def list_properties(
     no_prepayment: bool = False,
     available_only: bool = False,
     db: Session = Depends(get_db),
+    _: None = Depends(rate_limit_dependency(120, "properties_list")),
 ):
     from sqlalchemy import or_, func
 
@@ -407,6 +410,30 @@ def _overlaps(a_start, a_end, b_start, b_end) -> bool:
 @router.post("/search_availability", response_model=SearchAvailabilityOut)
 def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get_db), request: Request = None):
     from sqlalchemy import func
+    # Cache (short TTL) for identical requests
+    cached_key = None
+    if settings.CACHE_ENABLED:
+        try:
+            import json as _json
+            pl = payload.model_dump()
+            # Normalize dates to str for key stability
+            if isinstance(pl.get("check_in"), (str,)) is False:
+                pl["check_in"] = str(pl.get("check_in"))
+            if isinstance(pl.get("check_out"), (str,)) is False:
+                pl["check_out"] = str(pl.get("check_out"))
+            cached_key = ("search_availability", _json.dumps(pl, sort_keys=True))
+            cached = cache.get(cached_key)
+            if cached is not None:
+                # cached may be dict compatible with SearchAvailabilityOut
+                try:
+                    from ..schemas import SearchAvailabilityOut as _SAO
+                    if isinstance(cached, dict):
+                        return _SAO(**cached)
+                    return cached
+                except Exception:
+                    return cached
+        except Exception:
+            cached_key = None
     # naive availability: total_units - overlapping reservations
     props_q = db.query(Property)
     if payload.city:
@@ -739,11 +766,26 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
         price_max_cents=price_max,
         price_histogram=price_hist,
     )
-    return SearchAvailabilityOut(results=sliced, total=total, next_offset=next_off, facets=facets)
+    resp = SearchAvailabilityOut(results=sliced, total=total, next_offset=next_off, facets=facets)
+    if cached_key is not None:
+        try:
+            ttl = max(10, min(60, int(getattr(settings, "CACHE_DEFAULT_TTL_SECS", 60) // 2)))
+            cache.set(cached_key, resp.model_dump(), ttl)
+        except Exception:
+            pass
+    return resp
 
 
 @router.get("/properties/top", response_model=list[PropertyOut])
-def top_properties(city: str | None = None, limit: int = 12, db: Session = Depends(get_db), request: Request = None, response: Response = None):
+def top_properties(
+    city: str | None = None,
+    rating_band: str | None = None,
+    limit: int = 12,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    response: Response = None,
+    _: None = Depends(rate_limit_dependency(60, "top_props")),
+):
     from sqlalchemy import func
     if settings.CACHE_ENABLED:
         ck = ("top_props", city or "_all_", int(limit))
@@ -791,11 +833,28 @@ def top_properties(city: str | None = None, limit: int = 12, db: Session = Depen
     except Exception:
         pass
 
+    # Map rating_band to threshold
+    rb_min = None
+    if rating_band:
+        b = rating_band.strip()
+        if b == "5":
+            rb_min = 5
+        elif b in ("4+", "4"):
+            rb_min = 4
+        elif b in ("3+", "3"):
+            rb_min = 3
+        elif b in ("2+", "2"):
+            rb_min = 2
+        elif b in ("1+", "1"):
+            rb_min = 1
+
     rows = []
     for p in props:
         ravg, rcnt = rating_map.get(p.id, (0.0, 0))
         pop = pop_map.get(p.id, 0)
         score = (ravg or 0.0) * 0.7 + min(pop, 100) / 100.0 * 0.3
+        if rb_min is not None and (ravg or 0.0) < rb_min:
+            continue
         rows.append((p, score, ravg or None, rcnt))
     rows.sort(key=lambda t: (t[1], t[2] or 0.0, t[3]), reverse=True)
     out: list[PropertyOut] = []
@@ -904,74 +963,82 @@ def property_calendar(property_id: str, start: str | None = None, end: str | Non
 
 
 @router.get("/suggest", response_model=SuggestOut)
-def suggest(request: Request, response: Response, q: str, limit: int = 10, db: Session = Depends(get_db)):
+def suggest(request: Request, response: Response, q: str, limit: int = 10, db: Session = Depends(get_db), _: None = Depends(rate_limit_dependency(90, "suggest"))):
     from sqlalchemy import or_, func
     q = (q or "").strip()
     if not q:
         return SuggestOut(items=[])
+    from_cache = False
     if settings.CACHE_ENABLED:
         cache_key = ("suggest", q.lower(), int(limit))
         cached = cache.get(cache_key)
         if cached is not None:
-            return SuggestOut(items=cached)
+            items = cached
+            from_cache = True
+        else:
+            items = None
+    else:
+        cache_key = None
+        items = None
     like = f"%{q}%"
-    items: list[SuggestItemOut] = []
-    # Top cities by property count matching query
-    try:
-        cities = (
-            db.query(Property.city, func.count(Property.id))
-            .filter(Property.city.isnot(None), Property.city.ilike(like))
-            .group_by(Property.city)
-            .order_by(func.count(Property.id).desc())
-            .limit(max(1, limit // 2))
-            .all()
-        )
-        for (city, _cnt) in cities:
-            if city:
-                items.append(SuggestItemOut(type="city", name=city))
-    except Exception:
-        pass
-    # Properties matching by name/description
-    try:
-        props = (
-            db.query(Property)
-            .filter(or_(Property.name.ilike(like), Property.description.ilike(like)))
-            .order_by(Property.created_at.desc())
-            .limit(limit)
-            .all()
-        )
-        if props:
-            prop_ids = [p.id for p in props]
-            aggs = (
-                db.query(Review.property_id, func.avg(Review.rating))
-                .filter(Review.property_id.in_(prop_ids))
-                .group_by(Review.property_id)
+    if not from_cache:
+        items = []
+        # Top cities by property count matching query
+        try:
+            cities = (
+                db.query(Property.city, func.count(Property.id))
+                .filter(Property.city.isnot(None), Property.city.ilike(like))
+                .group_by(Property.city)
+                .order_by(func.count(Property.id).desc())
+                .limit(max(1, limit // 2))
                 .all()
             )
-            rmap = {pid: (float(avg) if avg is not None else None) for (pid, avg) in aggs}
-            imgs = (
-                db.query(PropertyImage)
-                .filter(PropertyImage.property_id.in_(prop_ids))
-                .order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc())
+            for (city, _cnt) in cities:
+                if city:
+                    items.append(SuggestItemOut(type="city", name=city))
+        except Exception:
+            pass
+        # Properties matching by name/description
+        try:
+            props = (
+                db.query(Property)
+                .filter(or_(Property.name.ilike(like), Property.description.ilike(like)))
+                .order_by(Property.created_at.desc())
+                .limit(limit)
                 .all()
             )
-            first_img: dict = {}
-            for im in imgs:
-                if im.property_id not in first_img:
-                    first_img[im.property_id] = im.url
-            for p in props:
-                items.append(
-                    SuggestItemOut(
-                        type="property",
-                        id=str(p.id),
-                        name=p.name,
-                        city=p.city,
-                        rating_avg=rmap.get(p.id),
-                        image_url=first_img.get(p.id),
-                    )
+            if props:
+                prop_ids = [p.id for p in props]
+                aggs = (
+                    db.query(Review.property_id, func.avg(Review.rating))
+                    .filter(Review.property_id.in_(prop_ids))
+                    .group_by(Review.property_id)
+                    .all()
                 )
-    except Exception:
-        pass
+                rmap = {pid: (float(avg) if avg is not None else None) for (pid, avg) in aggs}
+                imgs = (
+                    db.query(PropertyImage)
+                    .filter(PropertyImage.property_id.in_(prop_ids))
+                    .order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc())
+                    .all()
+                )
+                first_img: dict = {}
+                for im in imgs:
+                    if im.property_id not in first_img:
+                        first_img[im.property_id] = im.url
+                for p in props:
+                    items.append(
+                        SuggestItemOut(
+                            type="property",
+                            id=str(p.id),
+                            name=p.name,
+                            city=p.city,
+                            rating_avg=rmap.get(p.id),
+                            image_url=first_img.get(p.id),
+                        )
+                    )
+        except Exception:
+            pass
     # Trim to limit
     items = items[:limit]
     if settings.CACHE_ENABLED:
@@ -996,7 +1063,13 @@ def suggest(request: Request, response: Response, q: str, limit: int = 10, db: S
 
 
 @router.get("/cities/popular", response_model=list[CityPopularOut])
-def popular_cities(request: Request, response: Response, limit: int = 8, db: Session = Depends(get_db)):
+def popular_cities(
+    request: Request,
+    response: Response,
+    limit: int = 8,
+    db: Session = Depends(get_db),
+    _: None = Depends(rate_limit_dependency(60, "cities_popular")),
+):
     from sqlalchemy import func
     if settings.CACHE_ENABLED:
         ck = ("cities_popular", int(limit))
@@ -1025,6 +1098,34 @@ def popular_cities(request: Request, response: Response, limit: int = 8, db: Ses
             avg_rating = float(avg) if avg is not None else None
         except Exception:
             avg_rating = None
+        # Rating bands by property average
+        rating_bands: dict[str, int] = {"5": 0, "4+": 0, "3+": 0, "2+": 0, "1+": 0}
+        try:
+            prop_ids_for_city = [pid for (pid,) in db.query(Property.id).filter(Property.city == city).all()]
+            if prop_ids_for_city:
+                per_prop = (
+                    db.query(Review.property_id, func.avg(Review.rating))
+                    .filter(Review.property_id.in_(prop_ids_for_city))
+                    .group_by(Review.property_id)
+                    .all()
+                )
+                for (_pid, ravg) in per_prop:
+                    try:
+                        rv = float(ravg) if ravg is not None else 0.0
+                        if rv >= 5:
+                            rating_bands["5"] += 1
+                        elif rv >= 4:
+                            rating_bands["4+"] += 1
+                        elif rv >= 3:
+                            rating_bands["3+"] += 1
+                        elif rv >= 2:
+                            rating_bands["2+"] += 1
+                        else:
+                            rating_bands["1+"] += 1
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         # Min base price among units in city
         try:
             from sqlalchemy import select
@@ -1047,7 +1148,7 @@ def popular_cities(request: Request, response: Response, limit: int = 8, db: Ses
             image_url = img.url if img else None
         except Exception:
             image_url = None
-        out.append(CityPopularOut(city=city, property_count=int(cnt), avg_rating=avg_rating, image_url=image_url, min_price_cents=min_price))
+        out.append(CityPopularOut(city=city, property_count=int(cnt), avg_rating=avg_rating, image_url=image_url, min_price_cents=min_price, rating_bands=rating_bands))
     if settings.CACHE_ENABLED:
         try:
             cache.set(ck, out, settings.CACHE_DEFAULT_TTL_SECS)
@@ -1067,7 +1168,17 @@ def popular_cities(request: Request, response: Response, limit: int = 8, db: Ses
 
 
 @router.get("/properties/nearby", response_model=list[PropertyOut])
-def properties_nearby(lat: float, lon: float, response: Response, radius_km: float = 10.0, limit: int = 100, db: Session = Depends(get_db), request: Request = None):
+def properties_nearby(
+    lat: float,
+    lon: float,
+    response: Response,
+    rating_band: str | None = None,
+    radius_km: float = 10.0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    _: None = Depends(rate_limit_dependency(90, "nearby")),
+):
     from sqlalchemy import func
     # Load candidates (bounded to a reasonable set; actual distance computed in Python)
     props = db.query(Property).limit(2000).all()
@@ -1111,6 +1222,21 @@ def properties_nearby(lat: float, lon: float, response: Response, radius_km: flo
     except Exception:
         pass
     # Distance filter/sort
+    # Map rating_band to threshold
+    rb_min = None
+    if rating_band:
+        b = rating_band.strip()
+        if b == "5":
+            rb_min = 5
+        elif b in ("4+", "4"):
+            rb_min = 4
+        elif b in ("3+", "3"):
+            rb_min = 3
+        elif b in ("2+", "2"):
+            rb_min = 2
+        elif b in ("1+", "1"):
+            rb_min = 1
+
     rows = []
     for p in props:
         plat = _to_float(p.latitude)
@@ -1120,6 +1246,8 @@ def properties_nearby(lat: float, lon: float, response: Response, radius_km: flo
         dkm = _haversine_km(lat, lon, plat, plon)
         if dkm <= radius_km:
             ravg, rcnt = rating_map.get(p.id, (None, 0))
+            if rb_min is not None and ((ravg or 0.0) < rb_min):
+                continue
             rows.append((dkm, p, ravg, rcnt))
     rows.sort(key=lambda t: (t[0], t[2] if t[2] is not None else -1.0, t[3]))
     out: list[PropertyOut] = []
@@ -1142,3 +1270,16 @@ def properties_nearby(lat: float, lon: float, response: Response, radius_km: flo
     except Exception:
         pass
     return out
+    # Rating band to min_rating mapping
+    if rating_band:
+        band = (rating_band or "").strip()
+        if band == "5":
+            min_rating = 5
+        elif band in ("4+", "4"):
+            min_rating = 4
+        elif band in ("3+", "3"):
+            min_rating = 3
+        elif band in ("2+", "2"):
+            min_rating = 2
+        elif band in ("1+", "1"):
+            min_rating = 1
