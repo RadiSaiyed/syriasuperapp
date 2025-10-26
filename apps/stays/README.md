@@ -21,10 +21,13 @@ API (MVP)
 - Public
   - `GET  /properties` — list properties (filters: `city`, `type`, `q`; returns rating and geo when available)
     - Filters: `min_rating`, map bounds `min_lat,max_lat,min_lon,max_lon`
-    - Sorting: `sort_by=rating|popularity|created|name|distance` (`distance` requires `center_lat,center_lon`), `sort_order=asc|desc`
+      - Policy-like filters (via amenities): `free_cancellation`, `breakfast_included`, `non_refundable`, `pay_at_property`, `no_prepayment`
+      - Availability filter: `available_only=true` requires `check_in` + `check_out`
+    - Sorting: `sort_by=rating|popularity|created|name|distance|price_preview` (`distance` requires `center_lat,center_lon`; `price_preview` requires `check_in,check_out`), `sort_order=asc|desc`
     - Pagination: `limit`, `offset`; headers include `X-Total-Count` and RFC5988 `Link` with `prev`/`next`
     - Favorites: if `Authorization: Bearer <jwt>` provided, items include `is_favorite`; `include_favorites_count=true` adds `favorites_count`
     - Price preview: `include_price_preview=true&check_in=YYYY-MM-DD&check_out=YYYY-MM-DD` adds `price_preview_total_cents` and `price_preview_nightly_cents`
+    - Result extras: may include `image_url`, `badges` (e.g., `top_rated`, `popular_choice`), and `distance_km` if center provided
   - `GET  /properties/{id}` — property details with units, images, aggregated ratings
     - Extras: `rating_histogram`, `similar` (top 6 similar properties in same city/type)
   - `GET  /properties/{id}/calendar` — property-level calendar (sum of available units and min nightly price per day)
@@ -46,6 +49,8 @@ API (MVP)
   - `GET  /properties/top` — recommended properties (by rating + popularity), optional `city`, `limit`
   - `GET  /properties/nearby` — nearby properties by radius: `lat`, `lon`, `radius_km`, `limit`
   - `GET  /suggest` — search suggestions for cities and properties: `q`, optional `limit`
+  - Caching & headers:
+    - `/cities/popular`, `/properties/top`, `/properties/nearby`, `/suggest` set `Cache-Control: public, max-age=...` and ETag headers; some vary by `Authorization`.
 - Host (property owner)
   - `POST /host/properties` — create property
   - `GET  /host/properties` — list my properties
