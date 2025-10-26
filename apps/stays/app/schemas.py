@@ -42,6 +42,7 @@ class PropertyOut(BaseModel):
     rating_avg: Optional[float] = None
     rating_count: Optional[int] = None
     is_favorite: Optional[bool] = None
+    image_url: Optional[str] = None
 
 
 class UnitCreateIn(BaseModel):
@@ -126,6 +127,7 @@ class AvailableUnitOut(BaseModel):
     property_rating_avg: Optional[float] = None
     property_rating_count: Optional[int] = None
     distance_km: Optional[float] = None
+    badges: List[str] = []
 
 
 class SearchFacetsOut(BaseModel):

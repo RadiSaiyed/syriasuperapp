@@ -102,6 +102,13 @@ def list_properties(
     except Exception:
         pass
 
+    # First image per property (for list)
+    imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(prop_ids)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+    first_img: dict = {}
+    for im in imgs:
+        if im.property_id not in first_img:
+            first_img[im.property_id] = im.url
+
     rows = []
     for p in props:
         lat = _to_float(p.latitude)
@@ -136,6 +143,7 @@ def list_properties(
             address=p.address, latitude=p.latitude, longitude=p.longitude,
             rating_avg=(avg if avg != -1.0 else None), rating_count=cnt,
             is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
+            image_url=first_img.get(p.id),
         ))
     return out
 
@@ -392,6 +400,21 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
                 except Exception:
                     dist_val = None
 
+            badges: list[str] = []
+            if min_avail <= 1:
+                badges.append("limited_availability")
+            unit_tags_norm = {t.replace('-', '_').lower() for t in tags_map.get(u.id, [])}
+            if 'free_cancellation' in unit_tags_norm:
+                badges.append("free_cancellation")
+            if 'breakfast' in unit_tags_norm or 'breakfast_included' in unit_tags_norm:
+                badges.append("breakfast_included")
+            ravg, _rc = rating_map.get(p.id, (None, 0))
+            if ravg is not None and ravg >= 4.7:
+                badges.append("top_rated")
+            popscore = pop_map.get(p.id, 0)
+            if popscore >= 5:
+                badges.append("popular_choice")
+
             results.append(AvailableUnitOut(
                 property_id=str(p.id), property_name=p.name,
                 unit_id=str(u.id), unit_name=u.name,
@@ -401,6 +424,7 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
                 property_rating_count=rating_map.get(p.id, (None, 0))[1] if rating_map else None,
                 distance_km=dist_val,
                 is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
+                badges=badges,
             ))
 
     def _sort_key(item: AvailableUnitOut):
