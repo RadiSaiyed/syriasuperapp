@@ -14,6 +14,8 @@ from ..schemas import (
     SearchFacetsOut,
     UnitCalendarOut,
     UnitCalendarDayOut,
+    PropertyCalendarOut,
+    PropertyCalendarDayOut,
     SuggestOut,
     SuggestItemOut,
 )
@@ -39,6 +41,9 @@ def list_properties(
     min_lon: float | None = None,
     max_lon: float | None = None,
     include_favorites_count: bool = False,
+    include_price_preview: bool = False,
+    check_in: str | None = None,
+    check_out: str | None = None,
     db: Session = Depends(get_db),
 ):
     from sqlalchemy import or_, func
@@ -154,6 +159,57 @@ def list_properties(
             fav_count_map = {}
 
     out: list[PropertyOut] = []
+    # Optional price preview for provided dates
+    preview_map: dict = {}
+    if include_price_preview and check_in and check_out:
+        try:
+            from datetime import date as _date, timedelta as _td
+            ci = _date.fromisoformat(check_in)
+            co = _date.fromisoformat(check_out)
+            if co > ci:
+                for (p, _a, _c, _pop, _lat, _lon) in sliced:
+                    units = db.query(Unit).filter(Unit.property_id == p.id, Unit.active == True).all()  # noqa: E712
+                    if not units:
+                        continue
+                    unit_ids = [u.id for u in units]
+                    blocks = db.query(UnitBlock).filter(UnitBlock.unit_id.in_(unit_ids)).all() if unit_ids else []
+                    prices = db.query(UnitPrice).filter(UnitPrice.unit_id.in_(unit_ids), UnitPrice.date >= ci, UnitPrice.date < co).all() if unit_ids else []
+                    blocks_by_unit = {}
+                    for b in blocks:
+                        blocks_by_unit.setdefault(b.unit_id, []).append(b)
+                    prices_by_unit = {}
+                    for pr in prices:
+                        prices_by_unit.setdefault(pr.unit_id, {})[pr.date] = pr.price_cents
+                    nights = int((co - ci).days)
+                    best_total = None
+                    best_avg = None
+                    for u in units:
+                        # compute availability and cost
+                        rs = db.query(Reservation).filter(Reservation.unit_id == u.id, Reservation.status.in_(["created", "confirmed"]))
+                        res_days = [(r.check_in, r.check_out) for r in rs]
+                        date_iter = ci
+                        min_avail = u.total_units
+                        total_cost = int(u.cleaning_fee_cents)
+                        blks = blocks_by_unit.get(u.id, [])
+                        while date_iter < co:
+                            occ = sum(1 for (ci2, co2) in res_days if ci2 <= date_iter and date_iter < co2)
+                            blk = sum(b.blocked_units for b in blks if b.start_date <= date_iter and date_iter < b.end_date)
+                            avail_today = max(0, u.total_units - occ - blk)
+                            if avail_today < min_avail:
+                                min_avail = avail_today
+                            nightly = prices_by_unit.get(u.id, {}).get(date_iter, u.price_cents_per_night)
+                            total_cost += int(nightly)
+                            date_iter = date_iter + _td(days=1)
+                        if min_avail <= 0:
+                            continue
+                        if best_total is None or total_cost < best_total:
+                            best_total = int(total_cost)
+                            best_avg = int((total_cost - int(u.cleaning_fee_cents)) / float(nights)) if nights > 0 else int(u.price_cents_per_night)
+                    if best_total is not None:
+                        preview_map[p.id] = (best_total, best_avg)
+        except Exception:
+            preview_map = {}
+
     for (p, avg, cnt, _pop, _lat, _lon) in sliced:
         out.append(PropertyOut(
             id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
@@ -162,6 +218,8 @@ def list_properties(
             is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
             image_url=first_img.get(p.id),
             favorites_count=fav_count_map.get(p.id) if fav_count_map else None,
+            price_preview_total_cents=preview_map.get(p.id, (None, None))[0] if preview_map else None,
+            price_preview_nightly_cents=preview_map.get(p.id, (None, None))[1] if preview_map else None,
         ))
     # Pagination headers
     if response is not None and request is not None:
@@ -393,6 +451,18 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
                 norm_tags = {t.replace('-', '_').lower() for t in tags_map.get(u.id, [])}
                 if 'breakfast' not in norm_tags and 'breakfast_included' not in norm_tags:
                     continue
+            if payload.non_refundable:
+                norm_tags = {t.replace('-', '_').lower() for t in tags_map.get(u.id, [])}
+                if 'non_refundable' not in norm_tags:
+                    continue
+            if payload.pay_at_property:
+                norm_tags = {t.replace('-', '_').lower() for t in tags_map.get(u.id, [])}
+                if 'pay_at_property' not in norm_tags:
+                    continue
+            if payload.no_prepayment:
+                norm_tags = {t.replace('-', '_').lower() for t in tags_map.get(u.id, [])}
+                if 'no_prepayment' not in norm_tags:
+                    continue
             if nights < u.min_nights:
                 continue
             rs = db.query(Reservation).filter(Reservation.unit_id == u.id, Reservation.status.in_(["created", "confirmed"]))
@@ -455,6 +525,7 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
             if popscore >= 5:
                 badges.append("popular_choice")
 
+            # policy flags
             results.append(AvailableUnitOut(
                 property_id=str(p.id), property_name=p.name,
                 unit_id=str(u.id), unit_name=u.name,
@@ -465,6 +536,10 @@ def search_availability(payload: SearchAvailabilityIn, db: Session = Depends(get
                 distance_km=dist_val,
                 is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
                 badges=badges,
+                policy_free_cancellation=('free_cancellation' in unit_tags_norm),
+                policy_non_refundable=('non_refundable' in unit_tags_norm),
+                policy_no_prepayment=('no_prepayment' in unit_tags_norm),
+                policy_pay_at_property=('pay_at_property' in unit_tags_norm),
             ))
 
     def _sort_key(item: AvailableUnitOut):
@@ -662,6 +737,53 @@ def unit_calendar(unit_id: str, start: str | None = None, end: str | None = None
         days.append(UnitCalendarDayOut(date=d, available_units=avail_today, price_cents=price_cents))
         d = d + _td(days=1)
     return UnitCalendarOut(unit_id=str(u.id), days=days)
+
+
+@router.get("/properties/{property_id}/calendar", response_model=PropertyCalendarOut)
+def property_calendar(property_id: str, start: str | None = None, end: str | None = None, db: Session = Depends(get_db)):
+    from datetime import date as _date, timedelta as _td
+    from ..utils.ids import as_uuid
+    p = db.get(Property, as_uuid(property_id))
+    if not p:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
+    s = _date.fromisoformat(start) if start else _date.today()
+    e = _date.fromisoformat(end) if end else (s + _td(days=30))
+    if e <= s:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid range")
+    units = db.query(Unit).filter(Unit.property_id == p.id, Unit.active == True).all()  # noqa: E712
+    if not units:
+        return PropertyCalendarOut(property_id=str(p.id), days=[])
+    unit_ids = [u.id for u in units]
+    rs = db.query(Reservation).filter(Reservation.unit_id.in_(unit_ids), Reservation.status.in_(["created", "confirmed"]))
+    res_days_by_unit = {}
+    for r in rs:
+        res_days_by_unit.setdefault(r.unit_id, []).append((r.check_in, r.check_out))
+    blocks = db.query(UnitBlock).filter(UnitBlock.unit_id.in_(unit_ids)).all()
+    blocks_by_unit = {}
+    for b in blocks:
+        blocks_by_unit.setdefault(b.unit_id, []).append(b)
+    prices = db.query(UnitPrice).filter(UnitPrice.unit_id.in_(unit_ids), UnitPrice.date >= s, UnitPrice.date < e).all()
+    prices_by_unit = {}
+    for pr in prices:
+        prices_by_unit.setdefault(pr.unit_id, {})[pr.date] = pr.price_cents
+    days: list[PropertyCalendarDayOut] = []
+    d = s
+    while d < e:
+        total_avail = 0
+        min_price = None
+        for u in units:
+            occ = sum(1 for (ci, co) in res_days_by_unit.get(u.id, []) if ci <= d and d < co)
+            blk = sum(b.blocked_units for b in blocks_by_unit.get(u.id, []) if b.start_date <= d and d < b.end_date)
+            avail_today = max(0, u.total_units - occ - blk)
+            total_avail += avail_today
+            nightly = prices_by_unit.get(u.id, {}).get(d, u.price_cents_per_night)
+            if min_price is None or nightly < min_price:
+                min_price = int(nightly)
+        days.append(PropertyCalendarDayOut(date=d, available_units_total=total_avail, min_price_cents=int(min_price or 0)))
+        d = d + _td(days=1)
+    return PropertyCalendarOut(property_id=str(p.id), days=days)
 
 
 @router.get("/suggest", response_model=SuggestOut)

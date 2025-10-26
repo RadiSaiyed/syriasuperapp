@@ -44,6 +44,8 @@ class PropertyOut(BaseModel):
     is_favorite: Optional[bool] = None
     image_url: Optional[str] = None
     favorites_count: Optional[int] = None
+    price_preview_total_cents: Optional[int] = None
+    price_preview_nightly_cents: Optional[int] = None
 
 
 class UnitCreateIn(BaseModel):
@@ -102,6 +104,9 @@ class SearchAvailabilityIn(BaseModel):
     # Popular UX filters mapped to amenities
     free_cancellation: Optional[bool] = None
     breakfast_included: Optional[bool] = None
+    non_refundable: Optional[bool] = None
+    pay_at_property: Optional[bool] = None
+    no_prepayment: Optional[bool] = None
     # Optional map bounds (if provided, filters properties within box)
     min_lat: Optional[float] = None
     max_lat: Optional[float] = None
@@ -129,6 +134,10 @@ class AvailableUnitOut(BaseModel):
     property_rating_count: Optional[int] = None
     distance_km: Optional[float] = None
     badges: List[str] = []
+    policy_free_cancellation: Optional[bool] = None
+    policy_non_refundable: Optional[bool] = None
+    policy_no_prepayment: Optional[bool] = None
+    policy_pay_at_property: Optional[bool] = None
 
 
 class SearchFacetsOut(BaseModel):
@@ -250,6 +259,17 @@ class UnitCalendarDayOut(BaseModel):
 class UnitCalendarOut(BaseModel):
     unit_id: str
     days: List[UnitCalendarDayOut]
+
+
+class PropertyCalendarDayOut(BaseModel):
+    date: date
+    available_units_total: int
+    min_price_cents: int
+
+
+class PropertyCalendarOut(BaseModel):
+    property_id: str
+    days: List[PropertyCalendarDayOut]
 
 
 class SuggestItemOut(BaseModel):
