@@ -3,6 +3,31 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../services.dart';
 import 'ai_gateway_screen.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
+import '../animations.dart';
+import 'package:shared_ui/glass.dart';
+
+class _SkeletonTile extends StatelessWidget {
+  const _SkeletonTile();
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(children: [
+          Container(width: 36, height: 36, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8))),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(height: 12, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(4))),
+            const SizedBox(height: 6),
+            Container(height: 10, width: 160, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(4))),
+          ])),
+        ]),
+      ),
+    );
+  }
+}
 
 class JobsScreen extends StatefulWidget {
   const JobsScreen({super.key});
@@ -24,7 +49,7 @@ class _JobsScreenState extends State<JobsScreen> {
       final js = jsonDecode(r.body);
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     } finally {
       setState(() => _loading = false);
     }
@@ -43,15 +68,13 @@ class _JobsScreenState extends State<JobsScreen> {
             .toList();
       });
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     } finally {
       setState(() => _loading = false);
     }
   }
 
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { showToast(context, m); }
 
   @override
   Widget build(BuildContext context) {
@@ -81,19 +104,26 @@ class _JobsScreenState extends State<JobsScreen> {
               ]),
               const SizedBox(height: 8),
               Expanded(
-                child: _jobs.isEmpty
-                    ? const Center(child: Text('Keine Ergebnisse'))
-                    : ListView.builder(
-                        itemCount: _jobs.length,
-                        itemBuilder: (ctx, i) {
-                          final j = _jobs[i];
-                          return Card(
-                              child: ListTile(
-                            title: Text(j['title']?.toString() ?? ''),
-                            subtitle: Text('${j['location'] ?? ''} — ${(j['tags'] as List?)?.take(3).join(', ') ?? ''}'),
-                          ));
-                        },
-                      ),
+                child: AnimatedSwitcher(
+                  duration: AppAnimations.switcherDuration,
+                  child: _loading && _jobs.isEmpty
+                      ? Column(key: const ValueKey('skel'), children: List.generate(5, (i) => const _SkeletonTile()))
+                      : (_jobs.isEmpty
+                          ? const Center(key: ValueKey('empty'), child: Text('Keine Ergebnisse'))
+                          : ListView.builder(
+                              key: const ValueKey('list'),
+                              itemCount: _jobs.length,
+                              itemBuilder: (ctx, i) {
+                                final j = _jobs[i];
+                                return GlassCard(
+                                  child: ListTile(
+                                    title: Text(j['title']?.toString() ?? ''),
+                                    subtitle: Text('${j['location'] ?? ''} — ${(j['tags'] as List?)?.take(3).join(', ') ?? ''}'),
+                                  ),
+                                );
+                              },
+                            )),
+                ),
               ),
               const SizedBox(height: 8),
               Row(children: [

@@ -1,0 +1,201 @@
+{
+  "info": {
+    "name": "Stays API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "b676c1b4-0d0c-4d50-9c47-0000stays"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Request OTP",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {"raw": "{{baseUrl}}/auth/request_otp", "host": ["{{baseUrl}}"], "path": ["auth", "request_otp"]},
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+963900000000\"\n}"}
+          }
+        },
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {"raw": "{{baseUrl}}/auth/verify_otp", "host": ["{{baseUrl}}"], "path": ["auth", "verify_otp"]},
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+963900000000\",\n  \"otp\": \"123456\",\n  \"name\": \"Demo\",\n  \"role\": \"guest\"\n}"}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Public",
+      "item": [
+        {
+          "name": "List Properties",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}", "type": "text"}],
+            "url": {
+              "raw": "{{baseUrl}}/properties?city=Damascus&limit=10&offset=0&sort_by=distance&center_lat=33.5&center_lon=36.3&rating_band=4+",
+              "host": ["{{baseUrl}}"],
+              "path": ["properties"],
+              "query": [
+                {"key": "city", "value": "Damascus"},
+                {"key": "limit", "value": "10"},
+                {"key": "offset", "value": "0"},
+                {"key": "sort_by", "value": "distance"},
+                {"key": "center_lat", "value": "33.5"},
+                {"key": "center_lon", "value": "36.3"},
+                {"key": "rating_band", "value": "4+"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Top Picks",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{baseUrl}}/properties/top?city=Damascus&limit=5&offset=0&rating_band=4+",
+              "host": ["{{baseUrl}}"],
+              "path": ["properties", "top"],
+              "query": [
+                {"key": "city", "value": "Damascus"},
+                {"key": "limit", "value": "5"},
+                {"key": "offset", "value": "0"},
+                {"key": "rating_band", "value": "4+"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Nearby",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{baseUrl}}/properties/nearby?lat=33.51&lon=36.28&radius_km=5&limit=10&offset=0&rating_band=3+",
+              "host": ["{{baseUrl}}"],
+              "path": ["properties", "nearby"],
+              "query": [
+                {"key": "lat", "value": "33.51"},
+                {"key": "lon", "value": "36.28"},
+                {"key": "radius_km", "value": "5"},
+                {"key": "limit", "value": "10"},
+                {"key": "offset", "value": "0"},
+                {"key": "rating_band", "value": "3+"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Popular Cities",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/cities/popular?limit=8&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["cities", "popular"],
+              "query": [
+                {"key": "limit", "value": "8"},
+                {"key": "offset", "value": "0"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Suggest",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/suggest?q=dam", "host": ["{{baseUrl}}"], "path": ["suggest"], "query": [{"key": "q", "value": "dam"}]}
+          }
+        },
+        {
+          "name": "Search Availability",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {"raw": "{{baseUrl}}/search_availability", "host": ["{{baseUrl}}"], "path": ["search_availability"]},
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"city\": \"Damascus\",\n  \"check_in\": \"2025-11-01\",\n  \"check_out\": \"2025-11-03\",\n  \"guests\": 2,\n  \"group_by_property\": true,\n  \"sort_by\": \"best_value\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Property Calendar",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/properties/{{property_id}}/calendar?start=2025-11-01&end=2025-11-10", "host": ["{{baseUrl}}"], "path": ["properties", "{{property_id}}", "calendar"], "query": [{"key": "start", "value": "2025-11-01"}, {"key": "end", "value": "2025-11-10"}]}
+          }
+        },
+        {
+          "name": "Unit Calendar",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/units/{{unit_id}}/calendar?start=2025-11-01&end=2025-11-10", "host": ["{{baseUrl}}"], "path": ["units", "{{unit_id}}", "calendar"], "query": [{"key": "start", "value": "2025-11-01"}, {"key": "end", "value": "2025-11-10"}]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Host",
+      "item": [
+        {
+          "name": "Create Property",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "url": {"raw": "{{baseUrl}}/host/properties", "host": ["{{baseUrl}}"], "path": ["host", "properties"]},
+            "body": {"mode": "raw", "raw": "{\n  \"name\": \"Hotel Demo\",\n  \"type\": \"hotel\",\n  \"city\": \"Damascus\"\n}"}
+          }
+        },
+        {
+          "name": "Create Unit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "url": {"raw": "{{baseUrl}}/host/properties/{{property_id}}/units", "host": ["{{baseUrl}}"], "path": ["host", "properties", "{{property_id}}", "units"]},
+            "body": {"mode": "raw", "raw": "{\n  \"name\": \"Deluxe\",\n  \"capacity\": 2,\n  \"total_units\": 2,\n  \"price_cents_per_night\": 50000,\n  \"amenities\": [\"free_cancellation\", \"breakfast\"]\n}"}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Favorites",
+      "item": [
+        {
+          "name": "Favorite Property",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {"raw": "{{baseUrl}}/properties/{{property_id}}/favorite", "host": ["{{baseUrl}}"], "path": ["properties", "{{property_id}}", "favorite"]}
+          }
+        },
+        {
+          "name": "List Favorites",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {"raw": "{{baseUrl}}/properties/favorites", "host": ["{{baseUrl}}"], "path": ["properties", "favorites"]}
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {"key": "baseUrl", "value": "http://localhost:8088"},
+    {"key": "access_token", "value": ""},
+    {"key": "property_id", "value": ""},
+    {"key": "unit_id", "value": ""}
+  ]
+}
+

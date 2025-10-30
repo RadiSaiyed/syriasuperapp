@@ -1,0 +1,20 @@
+services:
+  api:
+    env_file: []
+    volumes:
+      - ./app:/app/app:ro
+      - ./tests:/app/apps/jobs/tests:ro
+      - ../../libs:/app/libs:ro
+      - ../../libs/superapp_shared/superapp_shared:/app/superapp_shared:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      UVICORN_WORKERS: "1"
+      UVICORN_LOG_LEVEL: "warning"
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/jobs
+      PYTHONPATH: /app/libs:/app
+      PAYMENTS_BASE_URL: http://host.docker.internal:8080
+      PAYMENTS_INTERNAL_SECRET: dev_secret
+      PAYMENTS_WEBHOOK_SECRET: demo_secret
+    mem_limit: "2g"
+    networks:
+      - default

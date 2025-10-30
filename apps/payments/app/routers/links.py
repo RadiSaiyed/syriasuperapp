@@ -12,6 +12,7 @@ from ..utils.fees import ensure_fee_wallet, calc_fee_bps
 from ..utils.audit import record_event
 from prometheus_client import Counter
 from ..utils.risk import evaluate_risk_and_maybe_block
+from ..utils.idempotency_store import reserve as idem_reserve, finalize as idem_finalize
 
 
 LINK_COUNTER = Counter("payments_links_total", "Pay-by-link payments", ["action"]) 
@@ -100,17 +101,34 @@ def pay_link(
     if amount <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid amount")
 
-    # Idempotency via transfers
-    existing = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
-    if existing:
-        return TransferOut(
-            transfer_id=str(existing.id),
-            from_wallet_id=str(existing.from_wallet_id) if existing.from_wallet_id else None,
-            to_wallet_id=str(existing.to_wallet_id),
-            amount_cents=existing.amount_cents,
-            currency_code=existing.currency_code,
-            status=existing.status,
-        )
+    # Idempotency reserve (fingerprint includes code+amount)
+    idem_rec = None
+    if payload.idempotency_key:
+        idem_payload = {"code": payload.code, "amount_cents": payload.amount_cents}
+        idem_rec, state = idem_reserve(db, str(user.id), "POST", "/payments/links/pay", payload.idempotency_key, idem_payload)
+        if state == "replay" and idem_rec.result_ref:
+            existing = db.query(Transfer).filter(Transfer.id == idem_rec.result_ref).one_or_none()
+            if existing:
+                return TransferOut(
+                    transfer_id=str(existing.id),
+                    from_wallet_id=str(existing.from_wallet_id) if existing.from_wallet_id else None,
+                    to_wallet_id=str(existing.to_wallet_id),
+                    amount_cents=existing.amount_cents,
+                    currency_code=existing.currency_code,
+                    status=existing.status,
+                )
+    # Fallback classic idempotency
+    if payload.idempotency_key and idem_rec is None:
+        existing = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+        if existing:
+            return TransferOut(
+                transfer_id=str(existing.id),
+                from_wallet_id=str(existing.from_wallet_id) if existing.from_wallet_id else None,
+                to_wallet_id=str(existing.to_wallet_id),
+                amount_cents=existing.amount_cents,
+                currency_code=existing.currency_code,
+                status=existing.status,
+            )
 
     payer_wallet = db.query(Wallet).filter(Wallet.user_id == user.id).with_for_update().one()
     merchant_wallet = db.query(Wallet).join(User, Wallet.user_id == User.id).filter(User.id == link.user_id).with_for_update().one()
@@ -184,6 +202,11 @@ def pay_link(
         currency_code=link.currency_code,
         status=t.status,
     )
+    try:
+        if idem_rec is not None:
+            idem_finalize(db, idem_rec, str(t.id))
+    except Exception:
+        pass
     record_event(db, "links.pay", str(user.id), {"amount_cents": amount})
     try:
         LINK_COUNTER.labels("pay").inc()

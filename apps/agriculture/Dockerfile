@@ -12,6 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 
 COPY apps/agriculture/app /app/app
+COPY apps/agriculture/alembic.ini /app/
+COPY apps/agriculture/alembic /app/alembic
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8093"]
+COPY apps/agriculture/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
+ENTRYPOINT ["/app/entrypoint.sh"]

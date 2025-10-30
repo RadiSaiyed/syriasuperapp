@@ -27,6 +27,11 @@ class Settings:
     RATE_LIMIT_AUTH_BOOST: int = int(os.getenv("RATE_LIMIT_AUTH_BOOST", "2"))
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     RATE_LIMIT_REDIS_PREFIX: str = os.getenv("RATE_LIMIT_REDIS_PREFIX", "rl_parking_offstreet")
+    # Payments (optional)
+    PAYMENTS_BASE_URL: str = os.getenv("PAYMENTS_BASE_URL", "")
+    PAYMENTS_INTERNAL_SECRET: str = os.getenv("PAYMENTS_INTERNAL_SECRET", "")
+    FEE_WALLET_PHONE: str = os.getenv("FEE_WALLET_PHONE", "+963000000000")
+    PAYMENTS_WEBHOOK_SECRET: str = os.getenv("PAYMENTS_WEBHOOK_SECRET", "")
 
     @property
     def jwt_expires_delta(self) -> timedelta:

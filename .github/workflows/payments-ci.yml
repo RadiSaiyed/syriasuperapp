@@ -395,58 +395,8 @@ PY
           echo $! > api.pid
           for i in $(seq 1 60); do curl -sf http://localhost:8080/health && break || sleep 1; done
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: clients/payments_web/package.json
-
-      - name: Install web deps
-        working-directory: clients/payments_web
-        run: |
-          npm install
-
-      - name: Run unit tests (Vitest)
-        working-directory: clients/payments_web
-        run: |
-          npm run test:unit -- --reporter=dot
-
-      - name: Install Playwright
-        working-directory: clients/payments_web
-        run: |
-          npx playwright install --with-deps
-
-      - name: Build and Preview
-        working-directory: clients/payments_web
-        env:
-          VITE_API_BASE: http://localhost:8080
-        run: |
-          npm run build
-          npx vite preview --port 5173 &
-          echo $! > preview.pid
-          for i in $(seq 1 30); do curl -sf http://localhost:5173/ && break || sleep 1; done
-
-      - name: Run E2E (Playwright)
-        working-directory: clients/payments_web
-        env:
-          BASE_URL: http://localhost:5173
-        run: |
-          npm run test:e2e -- --reporter=line
-
-      - name: Upload web logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: payments-web-logs
-          path: |
-            apps/payments/api.log
-
-      - name: Teardown preview and api
-        if: always()
-        run: |
-          kill $(cat clients/payments_web/preview.pid) 2>/dev/null || true
-          kill $(cat apps/payments/api.pid) 2>/dev/null || true
+      # Web client (clients/payments_web) removed in favor of unified Super‑App
+      # The Payments API remains tested above; preview teardown not required.
   supply-chain:
     name: Payments Supply Chain (SBOM, audit, licenses)
     runs-on: ubuntu-latest

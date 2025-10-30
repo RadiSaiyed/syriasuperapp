@@ -1,10 +1,13 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import '../services.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import 'bus_trip_screen.dart';
 import 'bus_booking_detail_screen.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
+import 'package:shared_core/shared_core.dart';
+
+import '../ui/errors.dart';
 
 const List<String> _syrianProvinces = [
   'Damascus',
@@ -30,6 +33,7 @@ class BusScreen extends StatefulWidget {
 }
 
 class _BusScreenState extends State<BusScreen> {
+  static const _service = 'bus';
   String _health = '?';
   bool _loading = false;
   // Search form
@@ -42,12 +46,6 @@ class _BusScreenState extends State<BusScreen> {
   List<Map<String, dynamic>> _upcomingBookings = [];
   List<Map<String, dynamic>> _pastBookings = [];
 
-  Future<Map<String, String>> _authHeaders() =>
-      authHeaders('bus', store: _tokens);
-
-  Uri _busUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('bus', path, query: query);
-
   @override
   void initState() {
     super.initState();
@@ -57,13 +55,18 @@ class _BusScreenState extends State<BusScreen> {
   Future<void> _healthCheck() async {
     setState(() => _loading = true);
     try {
-      final r = await http.get(_busUri('/health'));
-      final js = jsonDecode(r.body);
+      final js = await serviceGetJson(
+        _service,
+        '/health',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 5), staleIfOffline: true),
+      );
+      if (!mounted) return;
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Health check failed');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -81,10 +84,7 @@ class _BusScreenState extends State<BusScreen> {
   Future<void> _search() async {
     final from = _origin.trim();
     final to = _destination.trim();
-    if (from.isEmpty || to.isEmpty || _date == null) {
-      _toast('Please select from, to and date');
-      return;
-    }
+    if (from.isEmpty || to.isEmpty || _date == null) { MessageHost.showInfoBanner(context, 'Please select from, to and date'); return; }
     setState(() => _loading = true);
     try {
       final body = {
@@ -92,45 +92,35 @@ class _BusScreenState extends State<BusScreen> {
         'destination': to,
         'date': _date!.toIso8601String().substring(0, 10),
       };
-      final res = await http.post(_busUri('/trips/search'),
-          headers: await _authHeaders(),
-          body: jsonEncode(body));
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await servicePostJson(
+        _service,
+        '/trips/search',
+        body: body,
+        options: const RequestOptions(expectValidationErrors: true),
+      );
       final trips = (js['trips'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      _results
-        ..clear()
-        ..addAll(trips);
-      setState(() {});
+      if (!mounted) return;
+      setState(() {
+        _results
+          ..clear()
+          ..addAll(trips);
+      });
     } catch (e) {
-      _toast('Search failed: $e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Search failed');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _loadBookings() async {
     setState(() => _bookingsLoading = true);
     try {
-      final headers = await _authHeaders();
-      final res = await http.get(_busUri('/bookings'), headers: headers);
-      if (res.statusCode == 401 || res.statusCode == 403) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Bitte im Profil anmelden, um Buchungen zu sehen.')));
-        setState(() {
-          _upcomingBookings = [];
-          _pastBookings = [];
-        });
-        return;
-      }
-      if (res.statusCode >= 400) {
-        final msg = res.body.isNotEmpty
-            ? 'Serverfehler: ${res.body}'
-            : 'Fehler beim Laden der Buchungen.';
-        throw msg;
-      }
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await serviceGetJson(
+        _service,
+        '/bookings',
+        options: const RequestOptions(expectValidationErrors: true),
+      );
       final rows = ((js['bookings'] as List?) ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
@@ -178,11 +168,20 @@ class _BusScreenState extends State<BusScreen> {
         _upcomingBookings = upcoming;
         _pastBookings = past;
       });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Bookings failed: $e')));
+    } on ApiError catch (error) {
+      if (!mounted) return;
+      if (error.kind == CoreErrorKind.unauthorized || error.kind == CoreErrorKind.forbidden) {
+        MessageHost.showInfoBanner(context, 'Bitte im Profil anmelden, um Buchungen zu sehen.');
+        setState(() {
+          _upcomingBookings = [];
+          _pastBookings = [];
+        });
+        return;
       }
+      presentError(context, error, message: 'Bookings failed');
+    } catch (e) {
+      if (!mounted) return;
+      presentError(context, e, message: 'Bookings failed');
     } finally {
       if (mounted) {
         setState(() => _bookingsLoading = false);
@@ -193,7 +192,8 @@ class _BusScreenState extends State<BusScreen> {
   // Per-app OTP login removed: use central login
 
   void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+    if (!mounted) return;
+    showToast(context, m);
   }
 
   @override

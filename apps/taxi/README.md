@@ -148,7 +148,7 @@ Third‑Party Partners (APIs)
 
 Maps & Geocoding
 - Provider: Google Maps (Directions/ETA, Geocoding). Ohne API‑Key fällt die App in Dev/Test auf einfache Haversine‑Stubs zurück.
-- Frontend‑Tiles (TomTom/OSM/MapLibre) sind unabhängig vom Backend‑Provider.
+- Frontend‑Tiles (OSM/MapLibre) sind unabhängig vom Backend‑Provider.
 - Endpoints:
   - `GET /maps/reverse?lat=..&lon=..` → `{ display_name, lat, lon, address{} }`
   - `GET /maps/autocomplete?q=...&limit=5` → `{ items: [{ display_name, lat, lon, type, address{} }] }`
@@ -162,7 +162,7 @@ Maps & Geocoding
   - Caches: `MAPS_ROUTE_CACHE_SECS` (Routing), `MAPS_GEOCODER_CACHE_SECS`
 
 Tiles (Flutter)
-- Die App kann weiterhin TomTom/OSM/MapLibre Tiles nutzen; das Backend‑Routing läuft über Google Maps.
+- Die App nutzt OSM/MapLibre Tiles; das Backend‑Routing läuft über Google Maps.
 
 Config
 - Pricing/ETA

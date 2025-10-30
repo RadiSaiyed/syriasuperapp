@@ -2,11 +2,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import 'package:flutter_map/flutter_map.dart';
+import '../map_view.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import '../services.dart';
-import '../map_tiles.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 
 class GaragesScreen extends StatefulWidget {
   const GaragesScreen({super.key});
@@ -31,7 +32,7 @@ class _GaragesScreenState extends State<GaragesScreen> {
       final list = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
       setState(() => _facilities = list);
     } catch (e) {
-      _toast('Load failed: $e');
+      MessageHost.showErrorBanner(context, 'Load failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -69,14 +70,11 @@ class _GaragesScreenState extends State<GaragesScreen> {
         actions: [TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('Close'))],
       ));
     } catch (e) {
-      _toast('Reserve failed: $e');
+      MessageHost.showErrorBanner(context, 'Reserve failed: $e');
     }
   }
 
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+  void _toast(String msg) { if (!mounted) return; showToast(context, msg); }
 
   @override
   void initState() {
@@ -98,26 +96,21 @@ class _GaragesScreenState extends State<GaragesScreen> {
           const SizedBox(height: 8),
           SizedBox(
             height: 220,
-            child: tomTomConfigured()
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: FlutterMap(options: MapOptions(initialCenter: center, initialZoom: 14), children: [
-                      ...tomTomTileLayers(),
-                      MarkerLayer(markers: [
-                        for (final f in _facilities)
-                          Marker(
-                            point: LatLng((f['lat'] as num).toDouble(), (f['lon'] as num).toDouble()),
-                            width: 36,
-                            height: 36,
-                            child: GestureDetector(
-                              onTap: () => _reserve(f),
-                              child: const Icon(Icons.local_parking, color: Colors.blueAccent, size: 32),
-                            ),
-                          ),
-                      ])
-                    ]),
-                  )
-                : tomTomMissingKeyPlaceholder(),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SuperMapView(
+                center: center,
+                zoom: 14,
+                markers: [
+                  for (final f in _facilities)
+                    MapMarker(
+                      point: LatLng((f['lat'] as num).toDouble(), (f['lon'] as num).toDouble()),
+                      color: Colors.blueAccent,
+                      size: 32,
+                    ),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 8),
           if (_loading) const LinearProgressIndicator(minHeight: 2),

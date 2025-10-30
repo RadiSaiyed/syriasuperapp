@@ -380,6 +380,9 @@ services:
       - "traefik.http.routers.commerce.entrypoints=websecure"
       - "traefik.http.routers.commerce.tls.certresolver=letsencrypt"
       - "traefik.http.services.commerce.loadbalancer.server.port=8083"
+      - "traefik.http.services.commerce.loadbalancer.serversTransport=slow"
+      - "traefik.serversTransport.slow.forwardingTimeouts.responseHeaderTimeout=20s"
+      - "traefik.serversTransport.slow.forwardingTimeouts.readTimeout=30s"
     networks: [ web, internal ]
     restart: unless-stopped
 
@@ -456,6 +459,9 @@ services:
       - "traefik.http.routers.food.entrypoints=websecure"
       - "traefik.http.routers.food.tls.certresolver=letsencrypt"
       - "traefik.http.services.food.loadbalancer.server.port=8090"
+      - "traefik.http.services.food.loadbalancer.serversTransport=slow"
+      - "traefik.serversTransport.slow.forwardingTimeouts.responseHeaderTimeout=20s"
+      - "traefik.serversTransport.slow.forwardingTimeouts.readTimeout=30s"
     networks: [ web, internal ]
     restart: unless-stopped
 
@@ -529,6 +535,9 @@ services:
       - "traefik.http.routers.jobs.entrypoints=websecure"
       - "traefik.http.routers.jobs.tls.certresolver=letsencrypt"
       - "traefik.http.services.jobs.loadbalancer.server.port=8087"
+      - "traefik.http.services.jobs.loadbalancer.serversTransport=slow"
+      - "traefik.serversTransport.slow.forwardingTimeouts.responseHeaderTimeout=20s"
+      - "traefik.serversTransport.slow.forwardingTimeouts.readTimeout=30s"
     networks: [ web, internal ]
     restart: unless-stopped
 
@@ -606,4 +615,45 @@ services:
       - "traefik.http.routers.utilities.tls.certresolver=letsencrypt"
       - "traefik.http.services.utilities.loadbalancer.server.port=8084"
     networks: [ web, internal ]
+    restart: unless-stopped
+  # BFF (single API base)
+  bff:
+    image: ${REGISTRY}/${ORG}/syria-bff:${TAG}
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8070
+      PAYMENTS_BASE_URL: http://payments-api:8080
+      TAXI_BASE_URL: http://taxi-api:8081
+      BUS_BASE_URL: http://bus-api:8082
+      COMMERCE_BASE_URL: http://commerce-api:8083
+      UTILITIES_BASE_URL: http://utilities-api:8084
+      FREIGHT_BASE_URL: http://freight-api:8085
+      CARMARKET_BASE_URL: http://automarket-api:8086
+      JOBS_BASE_URL: http://jobs-api:8087
+      STAYS_BASE_URL: http://stays-api:8088
+      DOCTORS_BASE_URL: http://doctors-api:8089
+      FOOD_BASE_URL: http://food-api:8090
+      CHAT_BASE_URL: http://chat-api:8091
+      REALESTATE_BASE_URL: http://realestate-api:8092
+      AGRICULTURE_BASE_URL: http://agriculture-api:8093
+      LIVESTOCK_BASE_URL: http://livestock-api:8094
+      CARRENTAL_BASE_URL: http://carrental-api:8095
+      PARKING_BASE_URL: http://parking-api:8096
+      PARKING_OFFSTREET_BASE_URL: http://parking-offstreet-api:8097
+      FLIGHTS_BASE_URL: http://flights-api:8098
+      AI_GATEWAY_BASE_URL: http://ai-gateway:8099
+      REDIS_URL: redis://payments-redis:6379/9
+      FCM_SERVER_KEY: ${FCM_SERVER_KEY}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.bff.rule=Host(`api.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.bff.entrypoints=websecure"
+      - "traefik.http.routers.bff.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.bff.middlewares=secure-headers@docker"
+      - "traefik.http.services.bff.loadbalancer.server.port=8070"
+    networks:
+      - web
+      - internal
     restart: unless-stopped

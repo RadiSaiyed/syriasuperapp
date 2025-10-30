@@ -1,0 +1,20 @@
+services:
+  api:
+    env_file: []
+    volumes:
+      - ./app:/app/app:ro
+      - ../../libs:/app/libs:ro
+      - ../../libs/superapp_shared/superapp_shared:/app/superapp_shared:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      UVICORN_WORKERS: "1"
+      UVICORN_LOG_LEVEL: "warning"
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/parking_offstreet
+      PYTHONPATH: /app/libs:/app
+      PAYMENTS_BASE_URL: http://host.docker.internal:8080
+      PAYMENTS_INTERNAL_SECRET: 7065cd9520fd3079033552eec04a5f6e4a88071bfaff9275b8b536464a3fc09f
+      PAYMENTS_WEBHOOK_SECRET: demo_secret
+      FEE_WALLET_PHONE: "+963999999999"
+    mem_limit: "1g"
+    networks:
+      - default

@@ -1,9 +1,10 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:qr_flutter/qr_flutter.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import '../services.dart';
+import 'package:shared_core/shared_core.dart';
+
+import '../ui/errors.dart';
 
 class BusTicketScreen extends StatefulWidget {
   final String bookingId;
@@ -15,15 +16,9 @@ class BusTicketScreen extends StatefulWidget {
 }
 
 class _BusTicketScreenState extends State<BusTicketScreen> {
-  final _tokens = MultiTokenStore();
+  static const _service = 'bus';
   String? _qr;
   bool _loading = false;
-
-  Future<Map<String, String>> _authHeaders() =>
-      authHeaders('bus', store: _tokens);
-
-  Uri _busUri(String path) =>
-      ServiceConfig.endpoint('bus', path);
 
   @override
   void initState() {
@@ -35,17 +30,16 @@ class _BusTicketScreenState extends State<BusTicketScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final r = await http.get(
-        _busUri('/bookings/${widget.bookingId}/ticket'),
-        headers: await _authHeaders(),
+      final js = await serviceGetJson(
+        _service,
+        '/bookings/${widget.bookingId}/ticket',
+        options: const RequestOptions(expectValidationErrors: true, cacheTtl: Duration(minutes: 5), staleIfOffline: true),
       );
-      if (r.statusCode >= 400) throw Exception(r.body);
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
+      if (!mounted) return;
       setState(() => _qr = js['qr_text']?.toString());
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ticket load failed: $e')));
-      }
+      if (!mounted) return;
+      presentError(context, e, message: 'Ticket load failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

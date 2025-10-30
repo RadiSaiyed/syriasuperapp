@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_ui/shared_ui.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,7 +23,8 @@ class App extends StatelessWidget {
       themeMode: ThemeMode.dark,
       darkTheme: SharedTheme.dark(),
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blueGrey),
-      home: const _Home(),
+      scaffoldMessengerKey: MessageHost.messengerKey,
+      home: MessageHost(child: const _Home()),
     );
   }
 }
@@ -67,7 +70,7 @@ class _PaymentsTabState extends State<PaymentsTab> {
   Future<void> _load() async { final p=await SharedPreferences.getInstance(); setState((){ _baseCtrl.text=p.getString(_kPB)??'http://localhost:8080'; _jwt=p.getString(_kPJ); }); }
   Future<void> _saveBase() async { final p=await SharedPreferences.getInstance(); await p.setString(_kPB, _baseCtrl.text.trim()); }
   String get _b => _baseCtrl.text.trim().replaceAll(RegExp(r"/+$"), "");
-  void _toast(String m){ if(!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); }
+  void _toast(String m){ if(!mounted) return; showToast(context, m); }
 
   Future<void> _devLogin() async {
     await _saveBase(); setState(()=>_loading=true);
@@ -125,7 +128,7 @@ class _TaxiTabState extends State<TaxiTab> {
   Future<void> _saveBaseTok() async { final p=await SharedPreferences.getInstance(); await p.setString(_kTB,_baseCtrl.text.trim()); await p.setString(_kTT,_admCtrl.text.trim()); }
   String get _b => _baseCtrl.text.trim().replaceAll(RegExp(r"/+$"), "");
   Map<String,String> _adminHeaders()=>{'Content-Type':'application/json','X-Admin-Token':_admCtrl.text.trim()};
-  void _toast(String m){ if(!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); }
+  void _toast(String m){ if(!mounted) return; showToast(context, m); }
 
   Future<void> _devLogin() async {
     await _saveBaseTok(); setState(()=>_loading=true);

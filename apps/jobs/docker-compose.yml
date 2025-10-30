@@ -25,7 +25,7 @@ services:
     ports:
       - "8087:8087"
     networks:
-      - internal
+      - default
       - web
     labels:
       - "traefik.enable=true"
@@ -43,3 +43,10 @@ services:
 
 volumes:
   jobs_pg_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal

@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 import '../services.dart';
 
 class FlightsScreen extends StatefulWidget {
@@ -17,9 +19,7 @@ class _FlightsScreenState extends State<FlightsScreen> {
   Uri _flightsUri(String path, {Map<String, String>? query}) =>
       ServiceConfig.endpoint('flights', path, query: query);
 
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { showToast(context, m); }
 
   Future<void> _healthCheck() async {
     setState(() => _loading = true);
@@ -28,7 +28,7 @@ class _FlightsScreenState extends State<FlightsScreen> {
       final js = jsonDecode(r.body);
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     } finally {
       setState(() => _loading = false);
     }

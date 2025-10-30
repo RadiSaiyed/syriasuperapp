@@ -13,7 +13,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6388:6379"
+      - "6394:6379"
 
   api:
     container_name: livestock-api
@@ -25,7 +25,7 @@ services:
     ports:
       - "8094:8094"
     networks:
-      - internal
+      - default
       - web
     labels:
       - "traefik.enable=true"

@@ -19,7 +19,7 @@ services:
     ports:
       - "8086:8086"
     networks:
-      - internal
+      - default
       - web
     labels:
       - "traefik.enable=true"

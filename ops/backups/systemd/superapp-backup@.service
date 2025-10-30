@@ -1,0 +1,17 @@
+[#] SuperApp DB Backup (templated unit)
+[Unit]
+Description=SuperApp DB Backup (%i)
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/superapp
+# Loads S3/AWS envs and other variables for backup target
+EnvironmentFile=/opt/superapp/ops/deploy/compose-traefik/.env.prod
+Environment=APP=%i
+ExecStart=/usr/bin/bash -lc '/opt/superapp/ops/backups/run_backup.sh "$APP"'
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

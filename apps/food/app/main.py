@@ -24,6 +24,9 @@ from .utils.webhooks import process_pending_once
 import threading, time
 
 
+_DB_OK = True
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Food Delivery API", version="0.1.0")
 
@@ -149,9 +152,31 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health():
-        with engine.connect() as conn:
-            conn.execute(text("select 1"))
-        return {"status": "ok", "env": settings.ENV}
+        ok = True
+        try:
+            ok = bool(globals().get("_DB_OK", True))
+        except Exception:
+            ok = True
+        return {"status": "ok", "env": settings.ENV, "db": ("ok" if ok else "degraded")}
+
+    @app.on_event("startup")
+    async def _start_db_probe():
+        import threading, time
+
+        def _probe():
+            while True:
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("select 1"))
+                    globals()["_DB_OK"] = True
+                except Exception:
+                    globals()["_DB_OK"] = False
+                time.sleep(5)
+
+        try:
+            threading.Thread(target=_probe, daemon=True).start()
+        except Exception:
+            pass
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
     REQ_DURATION = Histogram(

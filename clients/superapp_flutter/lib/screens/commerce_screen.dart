@@ -1,52 +1,117 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import '../ui/glass.dart';
-import 'package:http/http.dart' as http;
+import 'package:shared_ui/glass.dart';
 import '../services.dart';
 import 'profile_screen.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
+import 'package:shared_core/shared_core.dart';
+
+import '../ui/errors.dart';
+import 'commerce_order_screen.dart';
+import '../animations.dart';
+
+class _SkeletonTile extends StatelessWidget {
+  const _SkeletonTile();
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(children: [
+          Container(width: 36, height: 36, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8))),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(height: 12, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(4))),
+            const SizedBox(height: 6),
+            Container(height: 10, width: 120, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(4))),
+          ])),
+        ]),
+      ),
+    );
+  }
+}
 
 class CommerceScreen extends StatefulWidget {
-  const CommerceScreen({super.key});
+  final String? initialShopId;
+  final String? initialProductId;
+  final String? initialAction; // 'checkout' | 'checkout_auto'
+  final String? initialOrderId;
+  const CommerceScreen({super.key, this.initialShopId, this.initialProductId, this.initialAction, this.initialOrderId});
   @override
   State<CommerceScreen> createState() => _CommerceScreenState();
 }
 
 class _CommerceScreenState extends State<CommerceScreen> {
-  final _tokens = MultiTokenStore();
   List<dynamic> _orders = [];
   List<dynamic> _shops = [];
   List<dynamic> _products = [];
   Map<String, dynamic>? _cart;
   String? _selectedShopId;
   bool _loading = false;
-
-  Future<Map<String, String>> _commerceHeaders() =>
-      authHeaders('commerce', store: _tokens);
-
-  Uri _commerceUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('commerce', path, query: query);
+  bool _bootstrapped = false;
 
   void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+    if (!mounted) return;
+    showToast(context, m);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // Bootstrap via deep-link parameters if provided
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (_bootstrapped) return;
+      _bootstrapped = true;
+      if (widget.initialShopId != null && widget.initialShopId!.isNotEmpty) {
+        await _listShops();
+        if (!mounted) return;
+        await _loadProducts(widget.initialShopId!);
+        if (!mounted) return;
+        if (widget.initialProductId != null && widget.initialProductId!.isNotEmpty) {
+          await _addToCart(widget.initialProductId!);
+          _toast('Produkt in den Warenkorb');
+        }
+      }
+      if ((widget.initialAction ?? '').isNotEmpty) {
+        if (widget.initialAction == 'checkout' || widget.initialAction == 'checkout_auto') {
+          await _viewCart();
+          if (widget.initialAction == 'checkout_auto') {
+            if ((_cart?['items'] as List?)?.isNotEmpty == true) {
+              await _checkout();
+            } else {
+              _toast('Warenkorb leer');
+            }
+          }
+        }
+      }
+      if ((widget.initialOrderId ?? '').isNotEmpty) {
+        await _listOrders();
+        _toast('Bestellung ${widget.initialOrderId} geladen');
+      }
+    });
   }
 
   Future<void> _listOrders() async {
-    final headers = await _commerceHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
+    if (!await hasTokenFor('commerce')) {
+      if (!mounted) return;
+      MessageHost.showInfoBanner(context, 'Login first');
       return;
     }
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final res = await http.get(_commerceUri('/orders'),
-          headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await serviceGetJson(
+        'commerce',
+        '/orders',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 1), staleIfOffline: true),
+      );
+      if (!mounted) return;
       setState(() => _orders = js['orders'] as List? ?? []);
     } catch (e) {
-      _toast('Orders failed: $e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Orders failed');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -69,32 +134,46 @@ class _CommerceScreenState extends State<CommerceScreen> {
         ])),
         const SizedBox(height: 8),
         if (_shops.isNotEmpty) const Text('Shops:'),
-        for (final s in _shops)
-          GlassCard(
-            child: ListTile(
-              title: Text(s['name'] ?? ''),
-              subtitle: Text('id: ${s['id']}  city: ${s['city'] ?? '-'}'),
-              trailing: TextButton(
-                onPressed: () => _loadProducts(s['id'] as String),
-                child: const Text('Products'),
-              ),
-            ),
-          ),
-        if (_selectedShopId != null && _products.isNotEmpty) ...[
+        AnimatedSwitcher(
+          duration: AppAnimations.switcherDuration,
+          child: _loading && _shops.isEmpty
+              ? Column(key: const ValueKey('skel1'), children: List.generate(3, (i) => const _SkeletonTile()))
+              : Column(key: const ValueKey('shops'), children: [
+                  for (final s in _shops)
+                    GlassCard(
+                      child: ListTile(
+                        title: Text(s['name'] ?? ''),
+                        subtitle: Text('id: ${s['id']}  city: ${s['city'] ?? '-'}'),
+                        trailing: TextButton(
+                          onPressed: () => _loadProducts(s['id'] as String),
+                          child: const Text('Products'),
+                        ),
+                      ),
+                    ),
+                ]),
+        ),
+        if (_selectedShopId != null) ...[
           const Divider(),
           Text('Products — Shop $_selectedShopId'),
           const SizedBox(height: 4),
-          for (final p in _products)
-            GlassCard(
-              child: ListTile(
-                title: Text(p['name'] ?? ''),
-                subtitle: Text('Price: ${p['price_cents']}c'),
-                trailing: FilledButton.tonal(
-                  onPressed: _loading ? null : () => _addToCart(p['id'] as String),
-                  child: const Text('Add to cart'),
-                ),
-              ),
-            ),
+          AnimatedSwitcher(
+            duration: AppAnimations.switcherDuration,
+            child: _loading && _products.isEmpty
+                ? Column(key: const ValueKey('skel2'), children: List.generate(4, (i) => const _SkeletonTile()))
+                : Column(key: const ValueKey('prods'), children: [
+                    for (final p in _products)
+                      GlassCard(
+                        child: ListTile(
+                          title: Text(p['name'] ?? ''),
+                          subtitle: Text('Price: ${p['price_cents']}c'),
+                          trailing: FilledButton.tonal(
+                            onPressed: _loading ? null : () => _addToCart(p['id'] as String),
+                            child: const Text('Add to cart'),
+                          ),
+                        ),
+                      ),
+                  ]),
+          ),
         ],
         if (_cart != null) ...[
           const Divider(),
@@ -106,91 +185,132 @@ class _CommerceScreenState extends State<CommerceScreen> {
               alignment: Alignment.centerRight,
               child: Text('Total: ${_cart!['total_cents'] ?? 0}c')),
         ],
-        for (final o in _orders)
-          GlassCard(child: ListTile(title: Text('Order ${o['id']}'), subtitle: Text('Status: ${o['status']} Total: ${o['total_cents']}'))),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: _loading && _orders.isEmpty
+              ? Column(key: const ValueKey('orders_skel'), children: List.generate(3, (i) => const _SkeletonTile()))
+              : Column(key: const ValueKey('orders_list'), children: [
+                  for (final o in _orders)
+                    GlassCard(child: ListTile(
+                      title: Text('Order ${o['id']}'),
+                      subtitle: Text('Status: ${o['status']} Total: ${o['total_cents']}'),
+                      onTap: () {
+                        final id = (o['id'] ?? '').toString();
+                        if (id.isNotEmpty) {
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => CommerceOrderScreen(orderId: id)));
+                        }
+                      },
+                    )),
+                ]),
+        ),
       ]),
     );
   }
 
   Future<void> _listShops() async {
-    final headers = await _commerceHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
+    if (!await hasTokenFor('commerce')) {
+      if (!mounted) return;
+      MessageHost.showInfoBanner(context, 'Login first');
       return;
     }
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final res = await http.get(_commerceUri('/shops'),
-          headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as List<dynamic>;
+      final js = await serviceGetJsonList(
+        'superapp',
+        '/v1/commerce/shops',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 5), staleIfOffline: true),
+      );
+      if (!mounted) return;
       setState(() {_shops = js; _products = []; _selectedShopId = null;});
     } catch (e) {
-      _toast('Shops failed: $e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Shops failed');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _loadProducts(String shopId) async {
-    final headers = await _commerceHeaders();
+    if (!await hasTokenFor('commerce')) {
+      if (!mounted) return;
+      MessageHost.showInfoBanner(context, 'Login first');
+      return;
+    }
+    if (!mounted) return;
     setState(() {_selectedShopId = shopId; _loading = true; _products = [];});
     try {
-      final res = await http.get(_commerceUri('/shops/$shopId/products'),
-          headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as List<dynamic>;
+      final js = await serviceGetJsonList(
+        'superapp',
+        '/v1/commerce/shops/$shopId/products',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 5), staleIfOffline: true),
+      );
+      if (!mounted) return;
       setState(() => _products = js);
     } catch (e) {
-      _toast('Products failed: $e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Products failed');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _addToCart(String productId) async {
-    final headers = await _commerceHeaders();
+    if (!await hasTokenFor('commerce')) {
+      if (!mounted) return;
+      MessageHost.showInfoBanner(context, 'Login first');
+      return;
+    }
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final res = await http.post(_commerceUri('/cart/items'),
-          headers: headers,
-          body: jsonEncode({'product_id': productId, 'qty': 1}));
-      if (res.statusCode >= 400) throw Exception(res.body);
+      await servicePost(
+        'commerce',
+        '/cart/items',
+        body: {'product_id': productId, 'qty': 1},
+        options: const RequestOptions(expectValidationErrors: true, idempotent: true, queueIfOffline: true),
+      );
       await _viewCart();
     } catch (e) {
-      _toast('Add failed: $e');
+      if (!mounted) return;
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        MessageHost.showInfoBanner(context, 'Offline – Vorgang wird gesendet, sobald Verbindung besteht.');
+        return;
+      }
+      presentError(context, e, message: 'Add failed');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _viewCart() async {
-    final headers = await _commerceHeaders();
     try {
-      final res = await http.get(_commerceUri('/cart'),
-          headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await serviceGetJson('commerce', '/cart');
+      if (!mounted) return;
       setState(() => _cart = js);
     } catch (e) {
-      _toast('Cart failed: $e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Cart failed');
     }
   }
 
   Future<void> _checkout() async {
-    final headers = await _commerceHeaders();
+    if (!await hasTokenFor('commerce')) {
+      if (!mounted) return;
+      MessageHost.showInfoBanner(context, 'Login first');
+      return;
+    }
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final res = await http.post(_commerceUri('/orders/checkout'),
-          headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await servicePostJson('commerce', '/orders/checkout');
       _toast('Order created: ${js['id']}');
       await _listOrders();
     } catch (e) {
-      _toast('Checkout failed: $e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Checkout failed');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 }

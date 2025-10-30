@@ -5,32 +5,33 @@ A unified container client bundling the verticals (Payments, Taxi, …). Each ve
 Start
 1) `cd clients/superapp_flutter`
 2) `flutter pub get`
-3) `flutter run \
-       --dart-define=TOMTOM_MAP_KEY=<your_dev_key> \
+3) Variante A — Single‑Base (empfohlen, BFF):
+   `flutter run --dart-define=SUPERAPP_API_BASE=http://<your_dev_mac_ip>:8070`
+   - BFF lokal: `make bff-up` (Port 8070)
+   - Alle Services laufen dann über `http://<host>:8070/<service>/...`
+   
+   Variante B — Per‑Service (Legacy):
+   `flutter run \
+       --dart-define=USE_GOOGLE_MAPS=true \
        --dart-define=SUPERAPP_BASE_HOST=http://<your_dev_mac_ip> \
        --dart-define=TAXI_BASE_URL=http://<your_dev_mac_ip>:8081 \
        --dart-define=PAYMENTS_BASE_URL=http://<your_dev_mac_ip>:8080 \
        --dart-define=CHAT_BASE_URL=https://chat.<your_domain>`
-   - Without a TomTom key the Taxi map doesn’t start (no fallback)
+   - Google Maps SDK wird auf iOS/Android verwendet (Key erforderlich; siehe unten). Ohne Key fällt die Map auf OSM‑Tiles zurück.
    - For physical devices (iOS/Android) use the Dev machine IP (not `localhost`)
-   - Custom style: `--dart-define=TOMTOM_TILE_STYLE=a8940ba3-b342-45b9-84d7-7fc7d3c538fe` uses the provided TomTom styling (GUID automatically mapped to `style/<id>`)
-   - Optional: `--dart-define=TOMTOM_TILE_STYLE=basic/main` for the TomTom default style set
-- Optional: `--dart-define=TOMTOM_SHOW_TRAFFIC_FLOW=false` to disable the traffic overlay
+   - Optional: `--dart-define=MAPS_SHOW_TRAFFIC=true` to enable Google traffic overlay where supported
  - For testing Chat in production, set `CHAT_BASE_URL=https://chat.<your_domain>`; Inbox/WebSocket will use it.
  - Optional (AI Gateway): `--dart-define=AI_GATEWAY_BASE_URL=http://<your_dev_mac_ip>:8099` (UI erlaubt manuelles Setzen).
 
 Prod defines
-- Create `dart_defines/prod.json` (a template is included) with your production endpoints and keys:
+- Create `dart_defines/prod.json` (a template is included) with your production endpoints:
 
 ```
 {
   "TAXI_BASE_URL": "https://taxi.example.com",
   "PAYMENTS_BASE_URL": "https://payments.example.com",
   "CHAT_BASE_URL": "https://chat.example.com",
-  "TOMTOM_MAP_KEY": "<replace-with-real-key>",
-  "TOMTOM_TILE_STYLE": "basic/main",
-  "TOMTOM_SHOW_TRAFFIC_FLOW": "false",
-  "TOMTOM_SHOW_TRAFFIC_INCIDENTS": "false"
+  "USE_GOOGLE_MAPS": "true"
 }
 ```
 
@@ -67,15 +68,36 @@ export DART_DEFINES=$(jq -r 'to_entries|map("\(.key)=\(.value)")|map(@base64)|jo
 
 Notes
 - Prefer service-specific URLs (`*_BASE_URL`) for production. `SUPERAPP_BASE_HOST` is mainly for local dev.
+- With BFF single‑base, prefer `SUPERAPP_API_BASE` instead.
 - iOS requires HTTPS unless ATS exceptions are configured in `ios/Runner/Info.plist`.
+- Deep‑links: The app registers `superapp://` (iOS+Android). Beispiele:
+  - `superapp://feature/payments` öffnet die Wallet
+  - `superapp://feature/taxi` öffnet Taxi
+  - `superapp://search?q=invoice` öffnet die globale Suche
+  - Mit Parametern:
+    - `superapp://payments?view=p2p&to=+963900000002&amount=2500` (P2P vorbefüllen)
+    - `superapp://taxi?pickup=33.5138,36.2765&drop=33.5000,36.3000&action=request` (Fahrt anlegen und Taxi öffnen)
+    - `superapp://commerce?shop_id=SHOP1&product_id=PROD1&action=checkout` (Shop+Produkt, Warenkorb anzeigen)
+    - `superapp://commerce?action=order&order_id=ORDER123` (Bestellung öffnen)
+    - `superapp://stays?city=Damascus&check_in=2025-12-01&check_out=2025-12-03&guests=2` (Suche)
+    - `superapp://stays?view=listing&property_id=PROP123` (Listing‑Detail)
+- Google Maps Key:
+  - iOS: add the key to `ios/Runner/Info.plist` as `<key>GMSApiKey</key><string>YOUR_KEY</string>` and run `pod install` in `ios/`.
+  - Android: add `<meta-data android:name="com.google.android.geo.API_KEY" android:value="YOUR_KEY"/>` to `android/app/src/main/AndroidManifest.xml` inside `<application>`.
+  - The app uses Google Maps on mobile by default when `USE_GOOGLE_MAPS=true`.
 
 Services & Auth
 - Default base URLs point to localhost and can be adjusted in `lib/services.dart`.
 - OTP login is per service; tokens are stored per service in SharedPreferences.
 - Splash/silent login: on startup, an existing Payments token is validated and, if valid, propagated to all services (single‑login UX).
 
+Privacy & Offline
+- Privacy: Crash reporting is disabled by default and can be enabled in Settings → Privacy (no PII is sent; see `CrashReporter` config).
+- Offline: Frequently viewed lists (e.g., Commerce shops/products, Stays listings, Agriculture listings) use a small HTTP cache with TTL for faster loads and basic offline reads (`RequestOptions.cacheTtl`).
+
 Structure
 - `lib/main.dart` — Home (apps grid, tabs), splash/silent login
+- `lib/features.dart` — Feature manifest loader (BFF `/v1/features`)
 - `lib/services.dart` — service config + multi‑token store + OTP/auth helpers
 - `lib/screens/inbox_screen.dart` — realtime inbox (Chat WS + fetch)
 - `lib/screens/payments_screen.dart` — wallet (Payments)
@@ -90,3 +112,21 @@ Next steps
 - Shared profile/account area (phone, KYC status from Payments)
 - Push (FCM) in addition to WebSocket inbox
 - Optional: feature flags per environment
+
+Push & Topics (optional)
+- Foreground banners + local inbox are built‑in. For real push delivery, configure Firebase:
+  - iOS: add `ios/Runner/GoogleService-Info.plist`; enable Capabilities: Push Notifications + Background Modes (Remote notifications).
+  - Android: add `android/app/google-services.json`; apply Google Services Gradle plugins (already referenced by the template).
+- The BFF needs `FCM_SERVER_KEY` for real sends; without it, dev sends/broadcast simulate delivery.
+- Topics: Profile → Push Topics to subscribe/unsubscribe; Ops‑Admin can broadcast to topics.
+
+Settings & UX
+- Animations: Off/Normal/Smooth (Settings → Appearance) controls `AnimatedSwitcher` durations.
+- Chat unread refresh: choose refresh interval (10/20/60s) in Settings; WS increments count only messages addressed to you.
+- Haptics/Sounds: toggle action haptics and notification sounds.
+- Privacy: crash and analytics toggles in Settings → Privacy.
+- What’s New: reset in Settings to show again on next start.
+
+Extra structure
+- `lib/push_register.dart` — device registration + topic subscribe/unsubscribe flows
+- `lib/push_history.dart` — local notifications inbox + unread badge logic

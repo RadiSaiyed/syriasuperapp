@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'dart:async';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:http/http.dart' as http;
 import 'services.dart';
-import 'ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import 'package:shared_ui/shared_ui.dart';
+import 'package:shared_ui/message_host.dart';
 import 'ui/feedback.dart';
 import 'screens/payments_screen.dart';
 import 'apps/taxi_module.dart';
@@ -33,14 +33,27 @@ import 'screens/carrental_screen.dart';
 import 'screens/parking_screen.dart';
 import 'screens/garages_screen.dart';
 import 'screens/ai_gateway_screen.dart';
+import 'screens/search_screen.dart';
+import 'screens/notifications_screen.dart';
+import 'chat_unread.dart';
+import 'push_history.dart';
+import 'whats_new.dart';
+import 'animations.dart';
+import 'haptics.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'map_tiles.dart';
 // duplicates removed
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'auth.dart';
+import 'package:shared_core/shared_core.dart';
+import 'screens/outbox_screen.dart';
+import 'privacy.dart';
+import 'features.dart';
+import 'deeplinks.dart';
+import 'push_register.dart';
 
-const Color _primaryGlassAccent = Color(0xFF64D2FF);
+// Align Super‑App buttons with Taxi app button color (SharedColors.lime)
+const Color _primaryGlassAccent = Color(0xFFA4FF00);
 const Color _warmGlassAccent = Color(0xFFFFB340);
 const Color _lightPrimaryText = Color(0xFF1F2933);
 const Color _lightSecondaryText = Color(0xFF5B6474);
@@ -99,15 +112,34 @@ TextTheme _buildTextTheme(Brightness brightness) {
 }
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  // Load .env first so TOMTOM_MAP_KEY is available
-  try {
-    await dotenv.load(fileName: ".env");
-  } catch (_) {}
-  await AppTheme.load();
-  await AppSettings.load();
-  await _loadTomTomKeyAuto();
-  runApp(const SuperApp());
+  // Create reporter with compile-time settings; defer binding-dependent loads
+  final dsnEnv = const String.fromEnvironment('SENTRY_DSN', defaultValue: '');
+  final envName = const String.fromEnvironment('APP_ENV', defaultValue: 'dev');
+  final release = const String.fromEnvironment('APP_RELEASE', defaultValue: '');
+  final reporter = CrashReporter(
+    dsn: dsnEnv,
+    environment: envName,
+    release: release,
+  );
+  final errorHandler = GlobalErrorHandler(crashReporter: reporter);
+
+  await runWithCrashReporting(
+    reporter: reporter,
+    appRunner: () async {
+      // Perform all operations that may require Flutter bindings in the same zone
+      try { await dotenv.load(fileName: ".env"); } catch (_) {}
+      await AppTheme.load();
+      await AppSettings.load();
+      await AppPrivacy.load();
+      await FeatureRegistry.load();
+      // Optionally disable Sentry at runtime based on privacy
+      if (!AppPrivacy.sendCrashReports.value && reporter.isEnabled) {
+        await reporter.close();
+      }
+      errorHandler.install();
+      runApp(const SuperApp());
+    },
+  );
 }
 
 class SuperApp extends StatelessWidget {
@@ -217,10 +249,10 @@ class SuperApp extends StatelessWidget {
               ),
               outlinedButtonTheme: OutlinedButtonThemeData(
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: _lightPrimaryText,
+                  foregroundColor: _primaryGlassAccent,
                   textStyle: lightTextTheme.labelLarge,
                   side: BorderSide(
-                      color: _primaryGlassAccent.withValues(alpha: 0.4),
+                      color: _primaryGlassAccent.withValues(alpha: 0.8),
                       width: 1.2),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16)),
@@ -357,10 +389,10 @@ class SuperApp extends StatelessWidget {
               ),
               outlinedButtonTheme: OutlinedButtonThemeData(
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: _darkPrimaryText,
+                  foregroundColor: _primaryGlassAccent,
                   textStyle: darkTextTheme.labelLarge,
                   side: BorderSide(
-                      color: _primaryGlassAccent.withValues(alpha: 0.5),
+                      color: _primaryGlassAccent.withValues(alpha: 0.9),
                       width: 1.2),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16)),
@@ -414,10 +446,11 @@ class SuperApp extends StatelessWidget {
               locale: appLocale,
               theme: lightTheme,
               darkTheme: darkTheme,
+              scaffoldMessengerKey: MessageHost.messengerKey,
               builder: (context, child) => Stack(children: [
                 const LiquidBackground(),
                 const LiquidGlassOverlay(opacity: 0.30, blur: 60),
-                if (child != null) child,
+                if (child != null) MessageHost(child: child),
               ]),
               routes: {
                 '/home': (_) => const HomeScreen(),
@@ -497,6 +530,33 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _tab = 0;
+  @override
+  void initState() {
+    super.initState();
+    DeepLinks.init(context);
+    PushRegister.registerIfPossible();
+    AppAnimations.load();
+    AppHaptics.load();
+    ChatUnreadStore.refresh();
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final secs = prefs.getInt('chat_unread_interval_secs') ?? 20;
+      ChatUnreadStore.start(interval: Duration(seconds: secs.clamp(5, 300)));
+    }();
+    // Initialize unread badge from push history
+    PushHistoryStore.refreshUnread();
+    // Present What's New once per version bump
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      WhatsNew.maybeShow(context);
+    });
+  }
+
+  @override
+  void dispose() {
+    DeepLinks.dispose();
+    ChatUnreadStore.stop();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -548,6 +608,21 @@ class _HomeScreenState extends State<HomeScreen> {
             borderRadius: BorderRadius.zero),
         // No bottom: keep title always fully visible
         actions: [
+          const _OutboxButton(),
+          IconButton(
+            tooltip: 'Notifications',
+            icon: const Icon(Icons.notifications_outlined),
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsScreen()));
+            },
+          ),
+          IconButton(
+            tooltip: 'Search',
+            icon: const Icon(Icons.search),
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const SearchScreen()));
+            },
+          ),
           IconButton(
             tooltip: 'AI Command',
             icon: const Icon(Icons.smart_toy_outlined),
@@ -566,7 +641,33 @@ class _HomeScreenState extends State<HomeScreen> {
           )
         ],
       ),
-      body: pages[_tab],
+      body: _tab == 0 ? Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Glass(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(children: [
+                Expanded(child: HapticActionButton(icon: Icons.local_taxi, label: const Text('Ride Now'), onPressed: () {
+                  AppHaptics.impact();
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => TaxiModule.build()));
+                })),
+                const SizedBox(width: 8),
+                Expanded(child: HapticActionButton(icon: Icons.qr_code_scanner, label: const Text('Scan & Pay'), onPressed: () {
+                  AppHaptics.impact();
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PaymentsScreen(initialAction: 'scan')));
+                })),
+                const SizedBox(width: 8),
+                Expanded(child: HapticActionButton(icon: Icons.add_circle_outline, label: const Text('Top Up'), tonal: true, onPressed: () {
+                  AppHaptics.impact();
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PaymentsScreen(initialAction: 'topup')));
+                })),
+              ]),
+            ),
+          ),
+        ),
+        Expanded(child: pages[_tab]),
+      ]) : pages[_tab],
       bottomNavigationBar: SafeArea(
         minimum: const EdgeInsets.fromLTRB(12, 0, 12, 12),
         child: Column(
@@ -619,18 +720,53 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 8),
             Glass(
               padding: EdgeInsets.zero,
-              child: NavigationBar(
-                selectedIndex: _tab,
-                destinations: const [
-                  NavigationDestination(icon: Icon(Icons.apps), label: 'Apps'),
-                  NavigationDestination(
-                      icon: Icon(Icons.notifications_none), label: 'Inbox'),
-                  NavigationDestination(
-                      icon: Icon(Icons.person_outline), label: 'Profile'),
-                  NavigationDestination(
-                      icon: Icon(Icons.settings_outlined), label: 'Settings'),
-                ],
-                onDestinationSelected: (i) => setState(() => _tab = i),
+              child: ValueListenableBuilder<int>(
+                valueListenable: PushHistoryStore.unread,
+                builder: (context, unread, _) {
+                  Widget _inboxIcon() {
+                    final base = const Icon(Icons.notifications_none);
+                    if (unread <= 0) return base;
+                    return Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        base,
+                        Positioned(
+                          right: -2,
+                          top: -2,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(color: Colors.redAccent, borderRadius: BorderRadius.circular(10)),
+                            child: Text(unread > 99 ? '99+' : '$unread', style: const TextStyle(color: Colors.white, fontSize: 9)),
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+                  return NavigationBar(
+                    selectedIndex: _tab,
+                    destinations: [
+                      const NavigationDestination(icon: Icon(Icons.apps), label: 'Apps'),
+                      ValueListenableBuilder<int>(
+                        valueListenable: ChatUnreadStore.count,
+                        builder: (context, chatUnread, __) {
+                          final total = unread + (chatUnread > 0 ? chatUnread : 0);
+                          Widget icon() {
+                            final base = const Icon(Icons.notifications_none);
+                            if (total <= 0) return base;
+                            return Stack(clipBehavior: Clip.none, children: [base, Positioned(right: -2, top: -2, child: Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1), decoration: BoxDecoration(color: Colors.redAccent, borderRadius: BorderRadius.circular(10)), child: Text(total > 99 ? '99+' : '$total', style: const TextStyle(color: Colors.white, fontSize: 9))))]);
+                          }
+                          return NavigationDestination(icon: icon(), label: 'Inbox');
+                        },
+                      ),
+                      const NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
+                      const NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
+                    ],
+                    onDestinationSelected: (i) {
+                      if (i == 1) { ChatUnreadStore.set(0); PushHistoryStore.setSeenNow(); }
+                      setState(() => _tab = i);
+                    },
+                  );
+                },
               ),
             ),
           ],
@@ -654,9 +790,17 @@ class _AppsGrid extends StatefulWidget {
 class _AppsGridState extends State<_AppsGrid> {
   final PageController _pageCtrl = PageController();
   int _page = 0;
+  void _onFeaturesChanged() { if (mounted) setState(() {}); }
+
+  @override
+  void initState() {
+    super.initState();
+    FeatureRegistry.enabled.addListener(_onFeaturesChanged);
+  }
 
   @override
   void dispose() {
+    FeatureRegistry.enabled.removeListener(_onFeaturesChanged);
     _pageCtrl.dispose();
     super.dispose();
   }
@@ -697,134 +841,136 @@ class _AppsGridState extends State<_AppsGrid> {
       return SharedColors.textSecondary;
     }
 
-    final cards = [
-      // Page 1 (6 items)
-      _AppCard(
-          customIcon: const Text('💳', style: TextStyle(fontSize: 44)),
-          title: 'Payments',
-          accent: c('Payments'),
-          onTap: widget.onLaunchPayments),
-      _AppCard(
-          customIcon: const Text('🚕', style: TextStyle(fontSize: 44)),
-          title: 'Taxi',
-          accent: c('Taxi'),
-          onTap: widget.onLaunchTaxi),
-      _AppCard(
-          customIcon: const Text('🍔', style: TextStyle(fontSize: 44)),
-          title: 'Food',
-          accent: c('Food'),
-          onTap: () => Navigator.push(
-              context, MaterialPageRoute(builder: (_) => const FoodScreen()))),
-      _AppCard(
-          customIcon: const Text('✈️', style: TextStyle(fontSize: 44)),
-          title: 'Flights',
-          accent: c('Flights'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const FlightsScreen()))),
-      _AppCard(
-          customIcon: const Text('🚌', style: TextStyle(fontSize: 44)),
-          title: 'Bus',
-          accent: c('Bus'),
-          onTap: () => Navigator.push(
-              context, MaterialPageRoute(builder: (_) => const BusScreen()))),
-      _AppCard(
-          customIcon: const Text('💬', style: TextStyle(fontSize: 44)),
-          title: 'Chat',
-          accent: c('Chat'),
-          onTap: () => Navigator.push(
-              context, MaterialPageRoute(builder: (_) => ChatModule.build()))),
+    final List<Widget> cards = [];
+    bool vis(String id) => FeatureRegistry.isEnabled(id);
+    void maybe(String id, Widget card) { if (vis(id)) cards.add(card); }
 
-      // Page 2 (requested order)
-      _AppCard(
-          customIcon: const Text('🚗', style: TextStyle(fontSize: 44)),
-          title: 'Car Market',
-          accent: c('Car Market'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const CarMarketScreen()))),
-      _AppCard(
-          customIcon: const Text('🚛', style: TextStyle(fontSize: 44)),
-          title: 'Freight',
-          accent: c('Freight'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const FreightScreen()))),
-      _AppCard(
-          customIcon: const Text('🔑🚗', style: TextStyle(fontSize: 44)),
-          title: 'Car Rental',
-          accent: c('Car Market'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const CarRentalScreen()))),
-      _AppCard(
-          customIcon: const Text('🏨', style: TextStyle(fontSize: 44)),
-          title: 'Stays',
-          accent: c('Stays'),
-          onTap: () => Navigator.push(
-              context, MaterialPageRoute(builder: (_) => const StaysScreen()))),
-      _AppCard(
-          customIcon: const Text('🏠', style: TextStyle(fontSize: 44)),
-          title: 'Real Estate',
-          accent: c('Real Estate'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const RealEstateScreen()))),
-      _AppCard(
-          customIcon: const Text('💼', style: TextStyle(fontSize: 44)),
-          title: 'Jobs',
-          accent: c('Jobs'),
-          onTap: () => Navigator.push(
-              context, MaterialPageRoute(builder: (_) => const JobsScreen()))),
+    // Page 1 (6 items)
+    maybe('payments', _AppCard(
+        customIcon: const Text('💳', style: TextStyle(fontSize: 44)),
+        title: 'Payments',
+        accent: c('Payments'),
+        onTap: widget.onLaunchPayments));
+    maybe('taxi', _AppCard(
+        customIcon: const Text('🚕', style: TextStyle(fontSize: 44)),
+        title: 'Taxi',
+        accent: c('Taxi'),
+        onTap: widget.onLaunchTaxi));
+    maybe('food', _AppCard(
+        customIcon: const Text('🍔', style: TextStyle(fontSize: 44)),
+        title: 'Food',
+        accent: c('Food'),
+        onTap: () => Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const FoodScreen()))));
+    maybe('flights', _AppCard(
+        customIcon: const Text('✈️', style: TextStyle(fontSize: 44)),
+        title: 'Flights',
+        accent: c('Flights'),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const FlightsScreen()))));
+    maybe('bus', _AppCard(
+        customIcon: const Text('🚌', style: TextStyle(fontSize: 44)),
+        title: 'Bus',
+        accent: c('Bus'),
+        onTap: () => Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const BusScreen()))));
+    maybe('chat', _AppCard(
+        customIcon: const Text('💬', style: TextStyle(fontSize: 44)),
+        title: 'Chat',
+        accent: c('Chat'),
+        onTap: () => Navigator.push(
+            context, MaterialPageRoute(builder: (_) => ChatModule.build()))));
 
-      // Page 3 (remaining)
-      _AppCard(
-          customIcon: const Text('🔌', style: TextStyle(fontSize: 44)),
-          title: 'Utilities',
-          accent: c('Utilities'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const UtilitiesScreen()))),
-      _AppCard(
-          customIcon: const Text('🩺', style: TextStyle(fontSize: 44)),
-          title: 'Doctors',
-          accent: c('Doctors'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const DoctorsScreen()))),
-      _AppCard(
-          customIcon: const Text('🛍️', style: TextStyle(fontSize: 44)),
-          title: 'Commerce',
-          accent: c('Commerce'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const CommerceScreen()))),
-      _AppCard(
-          customIcon: const Text('🅿️', style: TextStyle(fontSize: 44)),
-          title: 'Parking',
-          accent: const Color(0xFF7BD881),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const ParkingScreen()))),
-      _AppCard(
-          customIcon: const Text('🏢', style: TextStyle(fontSize: 44)),
-          title: 'Garages',
-          accent: const Color(0xFF84A7FF),
-          onTap: () {
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const GaragesScreen()));
-          }),
-      _AppCard(
-          customIcon: const Text('🫒🍅', style: TextStyle(fontSize: 44)),
-          title: 'Agriculture',
-          accent: SharedColors.lime,
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const AgricultureScreen()))),
-      _AppCard(
-          customIcon: const Text('🤖', style: TextStyle(fontSize: 44)),
-          title: 'AI Assistant',
-          accent: const Color(0xFF64D2FF),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const AIGatewayScreen()))),
-      _AppCard(
-          customIcon: const Text('🐄', style: TextStyle(fontSize: 56)),
-          iconSize: 48,
-          title: 'Livestock',
-          accent: const Color(0xFFFFE08A),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const LivestockScreen()))),
-    ];
+    // Page 2 (requested order)
+    maybe('carmarket', _AppCard(
+        customIcon: const Text('🚗', style: TextStyle(fontSize: 44)),
+        title: 'Car Market',
+        accent: c('Car Market'),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const CarMarketScreen()))));
+    maybe('freight', _AppCard(
+        customIcon: const Text('🚛', style: TextStyle(fontSize: 44)),
+        title: 'Freight',
+        accent: c('Freight'),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const FreightScreen()))));
+    maybe('carrental', _AppCard(
+        customIcon: const Text('🔑🚗', style: TextStyle(fontSize: 44)),
+        title: 'Car Rental',
+        accent: c('Car Market'),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const CarRentalScreen()))));
+    maybe('stays', _AppCard(
+        customIcon: const Text('🏨', style: TextStyle(fontSize: 44)),
+        title: 'Stays',
+        accent: c('Stays'),
+        onTap: () => Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const StaysScreen()))));
+    maybe('realestate', _AppCard(
+        customIcon: const Text('🏠', style: TextStyle(fontSize: 44)),
+        title: 'Real Estate',
+        accent: c('Real Estate'),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const RealEstateScreen()))));
+    maybe('jobs', _AppCard(
+        customIcon: const Text('💼', style: TextStyle(fontSize: 44)),
+        title: 'Jobs',
+        accent: c('Jobs'),
+        onTap: () => Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const JobsScreen()))));
+
+    // Page 3 (remaining)
+    maybe('utilities', _AppCard(
+        customIcon: const Text('🔌', style: TextStyle(fontSize: 44)),
+        title: 'Utilities',
+        accent: c('Utilities'),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const UtilitiesScreen()))));
+    maybe('doctors', _AppCard(
+        customIcon: const Text('🩺', style: TextStyle(fontSize: 44)),
+        title: 'Doctors',
+        accent: c('Doctors'),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const DoctorsScreen()))));
+    maybe('commerce', _AppCard(
+        customIcon: const Text('🛍️', style: TextStyle(fontSize: 44)),
+        title: 'Commerce',
+        accent: c('Commerce'),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const CommerceScreen()))));
+    maybe('parking', _AppCard(
+        customIcon: const Text('🅿️', style: TextStyle(fontSize: 44)),
+        title: 'Parking',
+        accent: const Color(0xFF7BD881),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const ParkingScreen()))));
+    maybe('garages', _AppCard(
+        customIcon: const Text('🏢', style: TextStyle(fontSize: 44)),
+        title: 'Garages',
+        accent: const Color(0xFF84A7FF),
+        onTap: () {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const GaragesScreen()));
+        }));
+    maybe('agriculture', _AppCard(
+        customIcon: const Text('🫒🍅', style: TextStyle(fontSize: 44)),
+        title: 'Agriculture',
+        accent: SharedColors.lime,
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AgricultureScreen()))));
+    maybe('ai', _AppCard(
+        customIcon: const Text('🤖', style: TextStyle(fontSize: 44)),
+        title: 'AI Assistant',
+        accent: const Color(0xFF64D2FF),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AIGatewayScreen()))));
+    maybe('livestock', _AppCard(
+        customIcon: const Text('🐄', style: TextStyle(fontSize: 56)),
+        iconSize: 48,
+        title: 'Livestock',
+        accent: const Color(0xFFFFE08A),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const LivestockScreen()))));
     // Chunk into pages of exactly 6 apps each
     const int perPage = 6;
     final List<List<Widget>> pages = [];
@@ -884,6 +1030,71 @@ class _AppsGridState extends State<_AppsGrid> {
   }
 }
 
+class _OutboxButton extends StatefulWidget {
+  const _OutboxButton();
+  @override
+  State<_OutboxButton> createState() => _OutboxButtonState();
+}
+
+class _OutboxButtonState extends State<_OutboxButton> {
+  int _count = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    try {
+      int total = 0;
+      for (final svc in ServiceConfig.services) {
+        final q = OfflineRequestQueue(svc);
+        final items = await q.load();
+        total += items.length;
+      }
+      if (mounted) setState(() => _count = total);
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IconButton(
+          tooltip: 'Ausstehende Vorgänge',
+          icon: const Icon(Icons.outbox_outlined),
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const OutboxScreen()));
+          },
+        ),
+        if (_count > 0)
+          Positioned(
+            right: 8,
+            top: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.redAccent,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text('$_count', style: const TextStyle(color: Colors.white, fontSize: 10)),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _AppCard extends StatelessWidget {
   final Widget? customIcon;
   final String title;
@@ -905,9 +1116,13 @@ class _AppCard extends StatelessWidget {
             size: iconSize,
             color: accent ?? Theme.of(context).colorScheme.primary);
     return GlassCard(
-      child: InkWell(
-        onTap: () async => await onTap(),
-        child: Padding(
+      child: Semantics(
+        label: title,
+        button: true,
+        onTap: () {},
+        child: InkWell(
+          onTap: () async => await onTap(),
+          child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -937,6 +1152,7 @@ class _AppCard extends StatelessWidget {
               ),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -1007,14 +1223,11 @@ class AppTheme {
 
 class AppSettings {
   static const _langKey = 'app_language'; // 'system' | 'en' | 'de' | 'ar'
-  static const _flowKey = 'map_traffic_flow';
-  static const _incKey = 'map_traffic_incidents';
+  static const _flowKey = 'map_traffic';
   static const _liteKey = 'lite_mode_enabled';
   static final ValueNotifier<Locale?> locale = ValueNotifier<Locale?>(null);
-  static final ValueNotifier<bool> showTrafficFlow =
-      ValueNotifier<bool>(tomTomDefaultTrafficFlow);
-  static final ValueNotifier<bool> showTrafficIncidents =
-      ValueNotifier<bool>(tomTomDefaultTrafficIncidents);
+  static final ValueNotifier<bool> showTrafficFlow = ValueNotifier<bool>(
+      const bool.fromEnvironment('MAPS_SHOW_TRAFFIC', defaultValue: true));
   static final ValueNotifier<bool> liteMode = ValueNotifier<bool>(false);
 
   static Future<void> load() async {
@@ -1022,10 +1235,8 @@ class AppSettings {
       final prefs = await SharedPreferences.getInstance();
       final lang = prefs.getString(_langKey) ?? 'system';
       locale.value = _localeFrom(lang);
-      showTrafficFlow.value =
-          prefs.getBool(_flowKey) ?? tomTomDefaultTrafficFlow;
-      showTrafficIncidents.value =
-          prefs.getBool(_incKey) ?? tomTomDefaultTrafficIncidents;
+      showTrafficFlow.value = prefs.getBool(_flowKey) ??
+          const bool.fromEnvironment('MAPS_SHOW_TRAFFIC', defaultValue: true);
       liteMode.value = prefs.getBool(_liteKey) ?? false;
     } catch (_) {}
   }
@@ -1062,11 +1273,7 @@ class AppSettings {
   }
 
   static Future<void> setTrafficIncidents(bool v) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_incKey, v);
-      showTrafficIncidents.value = v;
-    } catch (_) {}
+    // No-op: incidents overlay not used in Google Maps setup
   }
 
   static Future<void> setLiteMode(bool v) async {
@@ -1078,54 +1285,4 @@ class AppSettings {
   }
 }
 
-Future<void> _loadTomTomKeyAuto() async {
-  try {
-    // 1) If already configured via env or override, skip
-    if (tomTomConfigured()) return;
-
-    // 2) Try .env (flutter_dotenv) first
-    final fromEnv = dotenv.maybeGet('TOMTOM_MAP_KEY')?.trim() ?? '';
-    if (fromEnv.isNotEmpty) {
-      setTomTomKey(fromEnv);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('tomtom_api_key', fromEnv);
-      return;
-    }
-
-    // 3) Load cached key if available
-    final prefs = await SharedPreferences.getInstance();
-    final cached = prefs.getString('tomtom_api_key') ?? '';
-    if (cached.isNotEmpty) {
-      setTomTomKey(cached);
-      return;
-    }
-
-    // 4) Try to fetch from known service endpoints (best-effort)
-    const candidateServices = ['payments', 'taxi'];
-
-    for (final service in candidateServices) {
-      for (final path in const ['/config/maps', '/maps/config']) {
-        try {
-          final uri = ServiceConfig.endpoint(service, path);
-          final res = await http.get(uri).timeout(const Duration(seconds: 2));
-          if (res.statusCode < 400 && res.body.isNotEmpty) {
-            final body = res.body;
-            // naive parse to avoid extra dependency
-            final match = RegExp(r'"(tomtom_api_key|key)"\s*:\s*"([^"]+)"')
-                .firstMatch(body);
-            final key = match != null ? (match.group(2) ?? '') : '';
-            if (key.isNotEmpty) {
-              setTomTomKey(key);
-              await prefs.setString('tomtom_api_key', key);
-              return;
-            }
-          }
-        } catch (_) {
-          // ignore and continue
-        }
-      }
-    }
-  } catch (_) {
-    // swallow errors; app can proceed without tiles
-  }
-}
+// Legacy map bootstrap removed; using Google/OSM paths only.

@@ -5,15 +5,15 @@
 
 # Maps & Geodata
 
-	- Map tiles/SDK: TomTom Maps (Web/SDK). Alternatively generic OSM tiles where legally permitted.
-  	- Geocoding/Reverse: TomTom Search API.
-  	- Places/Autocomplete: TomTom Search API; local fallbacks only if required by regulation.
+	- Map tiles: OSM tiles (FlutterMap) or MapLibre styles; Google Maps on mobile where available.
+	- Geocoding/Reverse: Google Maps (prod) or OSM Nominatim (fallback for clients).
+	- Places/Autocomplete: Google Places (prod) or Nominatim search fallback if needed.
 
 # Routing, ETA & Traffic
 
-  	- Routing & ETA: TomTom Routing API (traffic enabled).
-  	- Map‑matching: TomTom Snap‑to‑Roads or internal history if TomTom unavailable.
-  	- Traffic/ETA: TomTom Traffic; augment with historical travel‑time models.
+	- Routing & ETA: Google Maps Directions (traffic where enabled).
+	- Map‑matching: Google Roads or internal history if unavailable.
+	- Traffic/ETA: Google Traffic; augment with historical travel‑time models.
 
 # Push, SMS, Voice & Chat
 
@@ -44,7 +44,7 @@ ________________________________________________________________________________
 
 # Recommended minimal stack (sanctions‑friendly, self‑hosted)
 
-  	- Maps & Geocoding: TomTom SDKs/APIs.
-  	- Routing/ETA: TomTom (or simple historical ETA if needed).
+	- Maps & Geocoding: Google Maps SDKs/APIs; OSM tiles for display in clients when preferred.
+	- Routing/ETA: Google; fall back to simple heuristics if needed.
   	- Realtime: MQTT or Socket.IO.
   	- Backend: PostgreSQL+PostGIS, Redis, MinIO, Sentry.

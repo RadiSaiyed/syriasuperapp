@@ -18,6 +18,7 @@ class Settings:
     )
     AUTO_CREATE_SCHEMA: bool = env_bool("AUTO_CREATE_SCHEMA", default=DEV_MODE)
     OTP_MODE: str = os.getenv("OTP_MODE", "dev")
+    DEV_DISABLE_OTP: bool = env_bool("DEV_DISABLE_OTP", default=False)
     # Rate limiting
     RATE_LIMIT_BACKEND: str = os.getenv("RATE_LIMIT_BACKEND", "memory")
     RATE_LIMIT_PER_MINUTE: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))

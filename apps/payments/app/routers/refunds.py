@@ -9,6 +9,7 @@ from ..models import Wallet, User, Transfer, LedgerEntry, Merchant, Refund
 from ..schemas import TransferOut, RefundOut
 from ..utils.audit import record_event
 from ..models import WebhookEndpoint, WebhookDelivery
+from ..utils.idempotency_store import reserve as idem_reserve, finalize as idem_finalize
 from . import webhooks as webhooks_router
 from prometheus_client import Counter
 
@@ -47,8 +48,23 @@ def create_refund(
     if merchant_wallet.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not owner of original funds")
 
-    # Idempotency check via Transfers table
+    # Idempotency reserve (replay returns prior result)
+    idem_rec = None
     if idem_key:
+        idem_rec, state = idem_reserve(db, str(user.id), "POST", "/refunds", idem_key, payload)
+        if state == "replay" and idem_rec.result_ref:
+            existing = db.query(Transfer).filter(Transfer.id == idem_rec.result_ref).one_or_none()
+            if existing:
+                return TransferOut(
+                    transfer_id=str(existing.id),
+                    from_wallet_id=str(existing.from_wallet_id) if existing.from_wallet_id else None,
+                    to_wallet_id=str(existing.to_wallet_id),
+                    amount_cents=existing.amount_cents,
+                    currency_code=existing.currency_code,
+                    status=existing.status,
+                )
+    # Fallback idempotency via Transfers table (for back‑compat)
+    if idem_key and (idem_rec is None):
         existing = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
         if existing:
             return TransferOut(
@@ -119,6 +135,11 @@ def create_refund(
         currency_code=mw.currency_code,
         status=t.status,
     )
+    try:
+        if idem_rec is not None:
+            idem_finalize(db, idem_rec, str(t.id))
+    except Exception:
+        pass
     record_event(db, "refunds.create", str(user.id), {"original": str(t0.id), "amount_cents": payload.amount_cents})
     try:
         REFUND_COUNTER.labels("completed").inc()

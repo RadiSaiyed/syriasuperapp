@@ -39,7 +39,14 @@ def receive_webhook(
         pr_id = data.get("id")
         transfer_id = data.get("transfer_id")
         if pr_id:
-            ap = db.query(Appointment).filter(Appointment.payment_request_id == pr_id).one_or_none()
+            # In tests/dev, multiple appointments may reuse the same PR id.
+            # Pick the most recent one.
+            ap = (
+                db.query(Appointment)
+                .filter(Appointment.payment_request_id == pr_id)
+                .order_by(Appointment.created_at.desc())
+                .first()
+            )
             if ap is not None and ap.status != "confirmed":
                 ap.status = "confirmed"
                 if transfer_id:

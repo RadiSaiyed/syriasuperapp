@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  bff:
+    container_name: superapp-bff
+    build:
+      context: ../..
+      dockerfile: apps/bff/Dockerfile
+    environment:
+      - APP_ENV=${APP_ENV:-dev}
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8070
+      - PAYMENTS_BASE_URL=${PAYMENTS_BASE_URL:-http://host.docker.internal:8080}
+      - REDIS_URL=${REDIS_URL:-redis://payments-redis:6379/9}
+      - FCM_SERVER_KEY=${FCM_SERVER_KEY:-}
+    ports:
+      - "8070:8070"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8070/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5

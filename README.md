@@ -4,37 +4,11 @@ This monorepo will host the different verticals of the Super‑App. We start wit
 
 Structure
 - apps/
-  - payments/ — FastAPI service implementing wallet, P2P transfers, and merchant QR payments
-  - taxi/ — FastAPI service for ride-hailing (drivers, rides, matching)
-  - bus/ — FastAPI service for intercity bus ticket search and bookings
-  - flights/ — FastAPI service for flight search and ticket bookings
-  - commerce/ — FastAPI service for shops, products, cart, and orders
-  - utilities/ — FastAPI service for bills and mobile top-ups
-  - freight/ — FastAPI service for shippers/carriers (loads lifecycle)
-  - stays/ — FastAPI service for hotels & vacation rentals (properties, units, reservations)
-  - doctors/ — FastAPI service for doctor appointment booking (profiles, slots, appointments)
-  - food/ — FastAPI service for food delivery (restaurants, menus, cart, orders)
-  - chat/ — FastAPI service for chat (contacts, keys, ciphertext messages, WS)
-  - carmarket/ — Car Market service (FastAPI; listings, offers)
-  - ai_gateway/ — Shared AI service (chat, embeddings, ranking, RAG)
-  - agriculture/ — FastAPI service for farms, seasonal jobs, and produce market
-  - livestock/ — FastAPI service for livestock market and animal products
-  - carrental/ — FastAPI service for car rental marketplace (vehicles, bookings)
+  - payments/, taxi/, bus/, flights/, commerce/, utilities/, freight/, stays/, doctors/, food/, chat/, carmarket/, ai_gateway/, agriculture/, livestock/, carrental/ — vertical services
 - clients/
-  - payments_flutter/ — Flutter MVP client for the Payments API
-  - taxi_flutter/ — Flutter MVP client for the Taxi API
-  - bus_flutter/ — Flutter MVP client for the Bus API
-  - flights_flutter/ — Flutter MVP client for the Flights API
-  - commerce_flutter/ — Flutter MVP client for the Commerce API
-  - utilities_flutter/ — Flutter MVP client for the Utilities API
-  - freight_flutter/ — Flutter MVP client for the Freight API
-  - jobs_flutter/ — Flutter MVP client for the Jobs API
-  - stays_flutter/ — Flutter MVP client for the Stays API
-  - doctors_flutter/ — Flutter MVP client for the Doctors API
-  - patient_flutter/ — Minimal patient app (doctor appointments)
-  - food_flutter/ — Flutter MVP client for the Food Delivery API (MVP)
-  - chat_flutter/ — Flutter MVP client for the Chat API
-  - carmarket_flutter/ — Flutter MVP client for the Car Market API
+  - superapp_flutter/ — unified Flutter client (the only end‑user app)
+  - shared_core/, shared_ui/ — shared packages used by the super‑app
+  - ops_admin_flutter/ — optional desktop Ops/Admin helper
 - infra/ — Infra and local dev assets (added over time)
 - docs/ — Architecture notes and ADRs
 - demos/ — Minimal UI demos (open in browser)
@@ -71,6 +45,17 @@ Operator UIs
 - Each operator service exposes `/ui` for quick manual tests (paste JWT and use handy actions). See operators/README.md for details per app.
 - Taxi webhook simulation: open `operators/taxi_partners` → `/ui` and use “Simulate Webhooks → Taxi” to send signed ride status and driver location webhooks to Taxi API (default base `http://localhost:8081`, overridable via UI or `TAXI_BASE`).
 
+ Unified API (BFF)
+- BFF at `apps/bff` is the single entrypoint for the Super‑App.
+  - `GET /health`, `GET /v1/features` (ETag), `GET /v1/me` (aggregated: Payments wallet/KYC/Merchant + Chat summary)
+  - Path proxy `/<service>/*` and WS proxy `/{service}/ws` unify access to all verticals
+  - Convenience endpoints with ETag/304 for Commerce and Stays (shops/products/orders; properties/reservations/favorites)
+  - Push: device register, topics subscribe/list, dev send/broadcast by topic (see `apps/bff/README.md`)
+- Local: `make bff-up` (or `ENV=dev APP_PORT=8070 python -m apps.bff.app.main`)
+- Super‑App (single base):
+  - `--dart-define SUPERAPP_API_BASE=http://localhost:8070` routes all requests via BFF
+  - Features: unified deep‑links, notifications with topics, ETag caching for lists
+
 Embedded Payments (Handoff)
 - Verticals create Payment Requests via the Payments internal API and deep‑link users to the Payments app to approve: `payments://request/<id>`.
 - Backend env (per service): set in each app’s `.env` as applicable
@@ -83,17 +68,7 @@ Embedded Payments (Handoff)
   - Many clients include an “Open Payments” shortcut in the AppBar to launch the Payments app directly.
 
 Flutter Client
-- See `clients/payments_flutter/README.md:1` for setup and running.
-Bus Client: `clients/bus_flutter/README.md:1`
-Flights Client: `clients/flights_flutter/README.md:1`
-Commerce Client: `clients/commerce_flutter/README.md:1`
-Utilities Client: `clients/utilities_flutter/README.md:1`
-Freight Client: `clients/freight_flutter/README.md:1`
-Car Market Client: `clients/carmarket_flutter/README.md:1`
- Jobs Client: `clients/jobs_flutter/README.md:1`
- Agriculture (in Super‑App): `clients/superapp_flutter/lib/screens/agriculture_screen.dart:1`
- Livestock (in Super‑App): `clients/superapp_flutter/lib/screens/livestock_screen.dart:1`
- Car Rental (in Super‑App): `clients/superapp_flutter/lib/screens/carrental_screen.dart:1`
+- Unified app: see `clients/superapp_flutter/README.md:1` for setup and running.
 
 Taxi API
 - See `apps/taxi/README.md:1` and `docs/TAXI_MVP.md:1` for scope and setup.
@@ -152,6 +127,7 @@ Observability
   - `ops/observability/grafana/dashboards/taxi_wallet.json`
   - `ops/observability/grafana/dashboards/payments.json`
   - `ops/observability/grafana/dashboards/superapp_overview.json`
+  - `ops/observability/grafana/dashboards/bff.json`
 - Quick start (Prometheus + Grafana):
   - `docker compose -f ops/observability/docker-compose.yml up -d`
   - Prometheus: http://localhost:9090 (scrapes local services)

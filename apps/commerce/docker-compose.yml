@@ -8,6 +8,7 @@ services:
       - "5436:5432"
     volumes:
       - commerce_db_data:/var/lib/postgresql/data
+    # Use project-default network; avoid shared 'internal' to prevent cross-project name collisions
 
   api:
     container_name: commerce-api
@@ -19,7 +20,7 @@ services:
     ports:
       - "8083:8083"
     networks:
-      - internal
+      - default
       - web
     labels:
       - "traefik.enable=true"
@@ -39,6 +40,7 @@ services:
     image: redis:7-alpine
     ports:
       - "6382:6379"
+    # Use project-default network only; API can still join 'web' for Traefik
 
 volumes:
   commerce_db_data:

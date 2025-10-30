@@ -21,6 +21,8 @@ ops/secrets/
 **/dist/
 **/.dart_tool/
 **/.packages
+**/*.log
+**/*.db
 
 # macOS Finder cruft
 **/.DS_Store
@@ -29,3 +31,4 @@ ops/deploy/hetzner/terraform/.terraform/
 ops/deploy/hetzner/terraform/terraform.tfstate*
 cloud-init.rendered.yml
 ops/deploy/compose-traefik/.env.prod
+ops/deploy/compose-traefik/backups/

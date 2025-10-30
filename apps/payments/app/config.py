@@ -36,6 +36,7 @@ class Settings:
     OTP_MODE: str = os.getenv("OTP_MODE", "dev")  # dev|redis
     OTP_TTL_SECS: int = int(os.getenv("OTP_TTL_SECS", "300"))
     OTP_MAX_ATTEMPTS: int = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+    DEV_DISABLE_OTP: bool = env_bool("DEV_DISABLE_OTP", default=False)
     DEV_RESET_USER_STATE_ON_LOGIN: bool = env_bool(
         "DEV_RESET_USER_STATE_ON_LOGIN",
         default=DEV_MODE,

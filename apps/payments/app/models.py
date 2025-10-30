@@ -27,6 +27,8 @@ class User(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=default_uuid)
     phone = Column(String(32), nullable=False, unique=True, index=True)
+    username = Column(String(64), nullable=True, unique=True, index=True)
+    password_hash = Column(String(128), nullable=True)
     name = Column(String(128), nullable=True)
     is_merchant = Column(Boolean, nullable=False, default=False)
     is_agent = Column(Boolean, nullable=False, default=False)
@@ -352,5 +354,26 @@ class PasskeyCredential(Base):
     public_key = Column(String(1024), nullable=True)
     sign_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class IdempotencyKey(Base):
+    __tablename__ = "idempotency_keys"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_idem_user_key"),
+        Index("ix_idem_user_created", "user_id", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=default_uuid)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    key = Column(String(64), nullable=False)
+    method = Column(String(8), nullable=False)
+    path = Column(String(256), nullable=False)
+    body_hash = Column(String(64), nullable=False)  # sha256 hex
+    status = Column(String(16), nullable=False, default="in_progress")  # in_progress|completed
+    result_ref = Column(String(64), nullable=True)  # e.g., transfer id
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     user = relationship("User")

@@ -92,6 +92,14 @@ class QRCreateIn(BaseModel):
     currency_code: str = "SYP"
     mode: str = "dynamic"  # dynamic|static (static ignores amount here; amount provided at pay)
 
+    @field_validator("mode")
+    @classmethod
+    def valid_mode(cls, v: str) -> str:
+        vv = (v or "").lower()
+        if vv not in ("dynamic", "static"):
+            raise ValueError("mode must be 'dynamic' or 'static'")
+        return vv
+
 
 class QROut(BaseModel):
     code: str

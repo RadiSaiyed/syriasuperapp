@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../services.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 
 class LivestockScreen extends StatefulWidget {
   const LivestockScreen({super.key});
@@ -144,7 +146,7 @@ class _LivestockScreenState extends State<LivestockScreen>
       final js = jsonDecode(r.body) as Map<String, dynamic>;
       setState(() => _animals = js['animals'] as List<dynamic>);
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     }
   }
 
@@ -158,7 +160,7 @@ class _LivestockScreenState extends State<LivestockScreen>
       final js = jsonDecode(r.body) as Map<String, dynamic>;
       setState(() => _products = js['products'] as List<dynamic>);
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     }
   }
 
@@ -170,7 +172,7 @@ class _LivestockScreenState extends State<LivestockScreen>
       final js = jsonDecode(r.body) as Map<String, dynamic>;
       setState(() => _orders = js['orders'] as List<dynamic>);
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     }
   }
   Future<void> _loadFavorites() async {
@@ -186,7 +188,7 @@ class _LivestockScreenState extends State<LivestockScreen>
       if (rp.statusCode < 400) {
         setState(() => _favProducts = (jsonDecode(rp.body) as Map<String, dynamic>)['products'] as List<dynamic>);
       }
-    } catch (e) { _toast('$e'); }
+    } catch (e) { MessageHost.showErrorBanner(context, '$e'); }
   }
 
   Future<void> _loadAuctions() async {
@@ -196,7 +198,7 @@ class _LivestockScreenState extends State<LivestockScreen>
       final js = jsonDecode(r.body) as Map<String, dynamic>;
       setState(() => _auctions = js['auctions'] as List<dynamic>);
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     }
   }
 
@@ -217,10 +219,7 @@ class _LivestockScreenState extends State<LivestockScreen>
     );
     if (qty == null || qty <= 0) return;
     final h = await _livestockHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Please log in first');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Please log in first'); return; }
     try {
       final id = p['id'];
       final r = await _livestockPost(
@@ -233,16 +232,13 @@ class _LivestockScreenState extends State<LivestockScreen>
       _loadProducts();
       _loadOrders();
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     }
   }
 
   Future<void> _orderAnimal(Map<String, dynamic> a) async {
     final h = await _livestockHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Please log in first');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Please log in first'); return; }
     try {
       final id = a['id'];
       final r = await _livestockPost('/market/animals/$id/order', headers: h);
@@ -251,7 +247,7 @@ class _LivestockScreenState extends State<LivestockScreen>
       _loadAnimals();
       _loadOrders();
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     }
   }
 
@@ -263,15 +259,13 @@ class _LivestockScreenState extends State<LivestockScreen>
       _loadAnimals();
       _loadProducts();
     } catch (e) {
-      _toast('Seed fehlgeschlagen: $e');
+      MessageHost.showErrorBanner(context, 'Seed fehlgeschlagen: $e');
     }
   }
 
   // Per-app OTP login removed: use central login
 
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { showToast(context, m); }
 
   @override
   Widget build(BuildContext context) {

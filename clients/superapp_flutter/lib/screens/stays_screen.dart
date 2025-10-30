@@ -1,23 +1,30 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/services.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
+import 'package:shared_ui/toast.dart';
 import '../services.dart';
 import '../apps/stays_api.dart';
-import 'package:flutter_map/flutter_map.dart';
+import '../map_view.dart';
 import 'package:latlong2/latlong.dart';
-import '../map_tiles.dart';
+import 'package:flutter_map/flutter_map.dart';
+import '../ui/errors.dart';
+import '../animations.dart';
 
 class StaysScreen extends StatefulWidget {
-  const StaysScreen({super.key});
+  final String? initialCity;
+  final String? initialCheckIn;
+  final String? initialCheckOut;
+  final String? initialGuests;
+  final String? initialPropertyId;
+  const StaysScreen({super.key, this.initialCity, this.initialCheckIn, this.initialCheckOut, this.initialGuests, this.initialPropertyId});
   @override
   State<StaysScreen> createState() => _StaysScreenState();
 }
 
 class _StaysScreenState extends State<StaysScreen> {
+  static const _service = 'stays';
   final _api = StaysApi();
   final _tokens = MultiTokenStore();
   bool _loading = false;
@@ -76,9 +83,6 @@ class _StaysScreenState extends State<StaysScreen> {
       .toSet();
   int? _nextOffset;
 
-  Uri _staysUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('stays', path, query: query);
-
   @override
   void initState() {
     super.initState();
@@ -89,10 +93,39 @@ class _StaysScreenState extends State<StaysScreen> {
     _checkIn.text = ci.toIso8601String().substring(0, 10);
     _checkOut.text = co.toIso8601String().substring(0, 10);
     _refreshAuth();
+    // Apply incoming params and search
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (widget.initialCity != null && widget.initialCity!.isNotEmpty) {
+        _city.text = widget.initialCity!;
+      }
+      if (widget.initialCheckIn != null && widget.initialCheckIn!.isNotEmpty) {
+        _checkIn.text = widget.initialCheckIn!;
+      }
+      if (widget.initialCheckOut != null && widget.initialCheckOut!.isNotEmpty) {
+        _checkOut.text = widget.initialCheckOut!;
+      }
+      if (widget.initialGuests != null && widget.initialGuests!.isNotEmpty) {
+        _guests.text = widget.initialGuests!;
+      }
+      if ((widget.initialCity ?? '').isNotEmpty) {
+        await _search();
+      }
+      if ((widget.initialPropertyId ?? '').isNotEmpty) {
+        try {
+          final prop = await _api.getProperty(widget.initialPropertyId!);
+          if (!mounted) return;
+          showDialog(context: context, builder: (_) => AlertDialog(
+            title: Text(prop['name']?.toString() ?? 'Listing'),
+            content: Text('City: ${prop['city'] ?? '-'}\nType: ${prop['type'] ?? '-'}'),
+            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Schließen'))],
+          ));
+        } catch (_) {}
+      }
+    });
   }
 
   Future<void> _refreshAuth() async {
-    final t = await getTokenFor('stays', store: _tokens);
+    final t = await getTokenFor(_service, store: _tokens);
     if (!mounted) return;
     setState(() => _authed = t != null && t.isNotEmpty);
   }
@@ -100,11 +133,12 @@ class _StaysScreenState extends State<StaysScreen> {
   Future<void> _healthCheck() async {
     setState(() => _loading = true);
     try {
-      final r = await http.get(_staysUri('/health'));
-      final js = jsonDecode(r.body);
+      final js = await serviceGetJson(_service, '/health');
+      if (!mounted) return;
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Health check failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -114,7 +148,7 @@ class _StaysScreenState extends State<StaysScreen> {
     setState(() => _loading = true);
     try {
       const phone = '+963900000001';
-      await verifyOtp('stays', phone, '123456', name: 'User');
+      await verifyOtp(_service, phone, '123456', name: 'User');
       _toast('Logged in');
     } catch (e) {
       _toast('Login failed: $e');
@@ -161,7 +195,8 @@ class _StaysScreenState extends State<StaysScreen> {
         await _ensureCoordsForResults();
       }
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Search failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -201,7 +236,8 @@ class _StaysScreenState extends State<StaysScreen> {
       });
       if (_showMap) await _ensureCoordsForResults();
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Load more failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -254,7 +290,8 @@ class _StaysScreenState extends State<StaysScreen> {
       final pr = (res['payment_request_id'] ?? '') as String;
       if (pr.isNotEmpty) await _showPaymentCta(pr);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Booking failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -274,7 +311,8 @@ class _StaysScreenState extends State<StaysScreen> {
       final pr = (res['payment_request_id'] ?? '') as String;
       if (pr.isNotEmpty) await _showPaymentCta(pr);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Booking failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -353,7 +391,8 @@ class _StaysScreenState extends State<StaysScreen> {
       }
       setState(() => _reservations = rows);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Reservations failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -363,9 +402,11 @@ class _StaysScreenState extends State<StaysScreen> {
     setState(() => _loading = true);
     try {
       final rows = await _api.listFavorites();
+      if (!mounted) return;
       setState(() => _favorites = rows);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Favorites failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -386,7 +427,8 @@ class _StaysScreenState extends State<StaysScreen> {
       }
       await _loadFavorites();
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Toggle favorite failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -401,7 +443,8 @@ class _StaysScreenState extends State<StaysScreen> {
       _propNameCache[propertyId] = (detail['name'] ?? propertyId).toString();
       reviews = await _api.listReviews(propertyId);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Load property failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -571,10 +614,7 @@ class _StaysScreenState extends State<StaysScreen> {
     }
   }
 
-  void _toast(String m) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { if (!mounted) return; showToast(context, m); }
 
   @override
   Widget build(BuildContext context) {
@@ -589,6 +629,11 @@ class _StaysScreenState extends State<StaysScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Glass(child: Wrap(spacing: 8, children: [
+            FilledButton.tonal(onPressed: _loading ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StaysFavoritesScreen())), child: const Text('Favorites')),
+            FilledButton.tonal(onPressed: _loading ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StaysReservationsScreen())), child: const Text('Reservations')),
+          ])),
+          const SizedBox(height: 8),
           if (_loading) const LinearProgressIndicator(),
           Row(children: [
             Glass(
@@ -633,29 +678,14 @@ class _StaysScreenState extends State<StaysScreen> {
             Glass(
               child: SizedBox(
                 height: 220,
-                child: tomTomConfigured()
-                    ? FlutterMap(
-                        mapController: _mapCtrl,
-                        options: const MapOptions(
-                            initialCenter: LatLng(33.5138, 36.2765),
-                            initialZoom: 11),
-                        children: [
-                          ...tomTomTileLayers(showTrafficFlow: false),
-                          MarkerLayer(markers: [
-                            for (final e in _propCoords.entries)
-                              Marker(
-                                  point: e.value,
-                                  width: 40,
-                                  height: 40,
-                                  child: IconButton(
-                                      icon: const Icon(Icons.location_on,
-                                          color: Colors.redAccent),
-                                      onPressed: () =>
-                                          _openPropertyDetails(e.key)))
-                          ])
-                        ],
-                      )
-                    : tomTomMissingKeyPlaceholder(),
+                child: SuperMapView(
+                  center: const LatLng(33.5138, 36.2765),
+                  zoom: 11,
+                  markers: [
+                    for (final e in _propCoords.entries)
+                      MapMarker(point: e.value, color: Colors.redAccent, size: 36),
+                  ],
+                ),
               ),
             ),
           if (_showMap) const SizedBox(height: 12),
@@ -811,38 +841,34 @@ class _StaysScreenState extends State<StaysScreen> {
                 ]),
               ),
               const SizedBox(height: 8),
-              if (_results.isEmpty)
-                const Text('No results')
-              else ...[
-                const Divider(),
-                for (final r in _results)
-                  Builder(builder: (context) {
-                    final pid = (r['property_id'] ?? '').toString();
-                    final fav = _favoriteIds.contains(pid);
-                    return ListTile(
-                      onTap: () => _openPropertyDetails(pid),
-                      leading: IconButton(
-                        icon: Icon(fav ? Icons.favorite : Icons.favorite_border,
-                            color: fav ? Colors.pinkAccent : null),
-                        onPressed: _loading ? null : () => _toggleFavorite(pid),
-                      ),
-                      title: Text('${r['property_name']} — ${r['unit_name']}'),
-                      subtitle: Text(
-                          'Cap ${r['capacity']} • ${(r['nightly_price_cents'] / 100).toStringAsFixed(2)}/night • total ${(r['total_cents'] / 100).toStringAsFixed(2)}'),
-                      trailing: FilledButton(
-                          onPressed:
-                              !_authed || _loading ? null : () => _book(r),
-                          child: const Text('Book')),
-                    );
-                  }),
-                if (_nextOffset != null) ...[
-                  const SizedBox(height: 8),
-                  Center(
-                      child: OutlinedButton(
-                          onPressed: _loading ? null : _loadMore,
-                          child: const Text('Load more'))),
-                ]
-              ]
+              AnimatedSwitcher(
+                duration: AppAnimations.switcherDuration,
+                child: _loading && _results.isEmpty
+                    ? Column(key: const ValueKey('stays_skel'), children: List.generate(5, (i) => const _StaySkeletonTile()))
+                    : Column(key: const ValueKey('stays_list'), children: [
+                        if (_results.isEmpty) const Text('No results') else const Divider(),
+                        for (final r in _results)
+                          Builder(builder: (context) {
+                            final pid = (r['property_id'] ?? '').toString();
+                            final fav = _favoriteIds.contains(pid);
+                            return ListTile(
+                              onTap: () => _openPropertyDetails(pid),
+                              leading: IconButton(
+                                icon: Icon(fav ? Icons.favorite : Icons.favorite_border,
+                                    color: fav ? Colors.pinkAccent : null),
+                                onPressed: _loading ? null : () => _toggleFavorite(pid),
+                              ),
+                              title: Text('${r['property_name']} — ${r['unit_name']}'),
+                              subtitle: Text('Cap ${r['capacity']} • ${(r['nightly_price_cents'] / 100).toStringAsFixed(2)}/night • total ${(r['total_cents'] / 100).toStringAsFixed(2)}'),
+                              trailing: FilledButton(onPressed: !_authed || _loading ? null : () => _book(r), child: const Text('Book')),
+                            );
+                          }),
+                        if (_nextOffset != null) ...[
+                          const SizedBox(height: 8),
+                          Center(child: OutlinedButton(onPressed: _loading ? null : _loadMore, child: const Text('Load more'))),
+                        ]
+                      ]),
+              )
             ]),
           ),
           const SizedBox(height: 12),
@@ -857,20 +883,23 @@ class _StaysScreenState extends State<StaysScreen> {
                     onPressed: _loading ? null : _loadReservations,
                     child: const Text('Refresh')),
               ]),
-              if (_reservations.isEmpty)
-                const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8),
-                    child: Text('No reservations'))
-              else ...[
-                const Divider(),
-                for (final r in _reservations)
-                  ListTile(
-                    title: Text(
-                        '${_propNameCache[(r['property_id'] ?? '').toString()] ?? r['property_id']}'),
-                    subtitle: Text(
-                        'Status: ${r['status']} • Total ${(r['total_cents'] / 100).toStringAsFixed(2)}'),
-                  )
-              ]
+              AnimatedSwitcher(
+                duration: AppAnimations.switcherDuration,
+                child: _loading && _reservations.isEmpty
+                    ? Column(key: const ValueKey('resv_skel'), children: List.generate(3, (i) => const _StaySkeletonTile()))
+                    : Column(key: const ValueKey('resv_list'), children: [
+                        if (_reservations.isEmpty)
+                          const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('No reservations'))
+                        else ...[
+                          const Divider(),
+                          for (final r in _reservations)
+                            ListTile(
+                              title: Text('${_propNameCache[(r['property_id'] ?? '').toString()] ?? r['property_id']}'),
+                              subtitle: Text('Status: ${r['status']} • Total ${(r['total_cents'] / 100).toStringAsFixed(2)}'),
+                            )
+                        ]
+                      ]),
+              )
             ]),
           ),
           const SizedBox(height: 12),
@@ -885,21 +914,45 @@ class _StaysScreenState extends State<StaysScreen> {
                     onPressed: _loading ? null : _loadFavorites,
                     child: const Text('Refresh')),
               ]),
-              if (_favorites.isEmpty)
-                const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8),
-                    child: Text('No favorites'))
-              else ...[
-                const Divider(),
-                for (final p in _favorites)
-                  ListTile(
-                    title: Text('${p['name']} — ${p['city']}'),
-                    subtitle: Text(p['description'] ?? ''),
-                  )
-              ]
+              AnimatedSwitcher(
+                duration: AppAnimations.switcherDuration,
+                child: _loading && _favorites.isEmpty
+                    ? Column(key: const ValueKey('favs_skel'), children: List.generate(3, (i) => const _StaySkeletonTile()))
+                    : Column(key: const ValueKey('favs_list'), children: [
+                        if (_favorites.isEmpty)
+                          const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('No favorites'))
+                        else ...[
+                          const Divider(),
+                          for (final p in _favorites)
+                            ListTile(title: Text('${p['name']} — ${p['city']}'), subtitle: Text(p['description'] ?? ''))
+                        ]
+                      ]),
+              )
             ]),
           ),
         ],
+      ),
+    );
+  }
+}
+class _StaySkeletonTile extends StatelessWidget {
+  const _StaySkeletonTile();
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(children: [
+          Container(width: 48, height: 48, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8))),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(height: 12, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(4))),
+            const SizedBox(height: 6),
+            Container(height: 10, width: 140, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(4))),
+          ])),
+          const SizedBox(width: 12),
+          Container(width: 64, height: 28, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(14))),
+        ]),
       ),
     );
   }

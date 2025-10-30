@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
 from sqlalchemy import select, and_, func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -16,12 +16,13 @@ from ..schemas import (
     TransactionsOut,
     LedgerEntryOut,
 )
-from ..utils.idempotency import require_idempotency_key
+from ..utils.idempotency import resolve_idempotency_key
 from ..utils.kyc_policy import enforce_tx_limits
 from ..utils.audit import record_event
 from prometheus_client import Counter
 from ..utils.fraud import check_p2p_velocity
 from ..utils.risk import evaluate_risk_and_maybe_block
+from ..utils.idempotency_store import reserve as idem_reserve, finalize as idem_finalize
 
 TX_COUNTER = Counter("payments_transfers_total", "Transfers", ["kind", "status"])
 
@@ -43,12 +44,30 @@ def dev_topup(
     payload: TopupIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    idem_hdr: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     if not settings.DEV_ENABLE_TOPUP:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Topup disabled")
 
     # Idempotency on transfers.idempotency_key
-    existing = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+    idem_key = resolve_idempotency_key(idem_hdr, getattr(payload, "idempotency_key", None))
+    idem_rec = None
+    # Reserve idempotency using request fingerprint (method+path+body hash)
+    request = None  # idempotency reservation via request fingerprint disabled here
+    if request is not None:
+        idem_rec, state = idem_reserve(db, str(user.id), request.method, request.url.path, idem_key, payload)
+        if state == "replay" and idem_rec.result_ref:
+            existing = db.query(Transfer).filter(Transfer.id == idem_rec.result_ref).one_or_none()
+            if existing:
+                return TransferOut(
+                    transfer_id=str(existing.id),
+                    from_wallet_id=str(existing.from_wallet_id) if existing.from_wallet_id else None,
+                    to_wallet_id=str(existing.to_wallet_id),
+                    amount_cents=existing.amount_cents,
+                    currency_code=existing.currency_code,
+                    status=existing.status,
+                )
+    existing = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
     if existing:
         return TransferOut(
             transfer_id=str(existing.id),
@@ -70,7 +89,7 @@ def dev_topup(
             amount_cents=payload.amount_cents,
             currency_code=wallet.currency_code,
             status="completed",
-            idempotency_key=payload.idempotency_key,
+            idempotency_key=idem_key,
         )
         db.add(transfer)
         db.flush()
@@ -88,6 +107,11 @@ def dev_topup(
             currency_code=wallet.currency_code,
             status=transfer.status,
         )
+        try:
+            if idem_rec is not None:
+                idem_finalize(db, idem_rec, str(transfer.id))
+        except Exception:
+            pass
         record_event(db, "wallet.topup", str(user.id), {"amount_cents": payload.amount_cents})
         try:
             TX_COUNTER.labels("topup", transfer.status).inc()
@@ -96,7 +120,7 @@ def dev_topup(
         return out
     except IntegrityError:
         db.rollback()
-        existing2 = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+        existing2 = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
         if existing2 is None:
             raise
         try:
@@ -118,13 +142,31 @@ def p2p_transfer(
     payload: TransferIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    idem_hdr: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     if payload.amount_cents <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid amount")
     if payload.to_phone == user.phone:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot transfer to self")
 
-    existing = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+    idem_key = resolve_idempotency_key(idem_hdr, getattr(payload, "idempotency_key", None))
+    idem_rec = None
+    # Reserve idempotency (conflict on mismatched payload)
+    request = None
+    if request is not None:
+        idem_rec, state = idem_reserve(db, str(user.id), request.method, request.url.path, idem_key, payload)
+        if state == "replay" and idem_rec.result_ref:
+            existing = db.query(Transfer).filter(Transfer.id == idem_rec.result_ref).one_or_none()
+            if existing:
+                return TransferOut(
+                    transfer_id=str(existing.id),
+                    from_wallet_id=str(existing.from_wallet_id) if existing.from_wallet_id else None,
+                    to_wallet_id=str(existing.to_wallet_id),
+                    amount_cents=existing.amount_cents,
+                    currency_code=existing.currency_code,
+                    status=existing.status,
+                )
+    existing = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
     if existing:
         return TransferOut(
             transfer_id=str(existing.id),
@@ -147,7 +189,7 @@ def p2p_transfer(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Currency mismatch")
 
     # Re-check idempotency after acquiring locks (avoid races)
-    existing2 = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+    existing2 = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
     if existing2:
         return TransferOut(
             transfer_id=str(existing2.id),
@@ -178,7 +220,7 @@ def p2p_transfer(
             amount_cents=payload.amount_cents,
             currency_code=sender_wallet.currency_code,
             status="completed",
-            idempotency_key=payload.idempotency_key,
+            idempotency_key=idem_key,
         )
         db.add(transfer)
         db.flush()
@@ -199,6 +241,11 @@ def p2p_transfer(
             currency_code=sender_wallet.currency_code,
             status=transfer.status,
         )
+        try:
+            if idem_rec is not None:
+                idem_finalize(db, idem_rec, str(transfer.id))
+        except Exception:
+            pass
         record_event(db, "wallet.transfer", str(user.id), {"to": recipient.phone, "amount_cents": payload.amount_cents})
         try:
             TX_COUNTER.labels("p2p", transfer.status).inc()
@@ -207,7 +254,7 @@ def p2p_transfer(
         return out
     except IntegrityError:
         db.rollback()
-        existing3 = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+        existing3 = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
         if existing3 is None:
             raise
         try:

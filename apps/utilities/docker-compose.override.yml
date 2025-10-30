@@ -1,0 +1,17 @@
+services:
+  api:
+    env_file: []
+    volumes:
+      - ./app:/app/app:ro
+      - ./tests:/app/apps/utilities/tests:ro
+      - ../../libs:/app/libs:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      UVICORN_WORKERS: "1"
+      UVICORN_LOG_LEVEL: "warning"
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/utilities
+      PYTHONPATH: /app:/app/libs/superapp_shared
+    mem_limit: "2g"
+    networks:
+      - default
+

@@ -12,6 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 
 COPY apps/carrental/app /app/app
+COPY apps/carrental/alembic.ini /app/
+COPY apps/carrental/alembic /app/alembic
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8095"]
+COPY apps/carrental/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
+ENTRYPOINT ["/app/entrypoint.sh"]

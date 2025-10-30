@@ -13,9 +13,13 @@ from .routers import employer as employer_router
 from .routers import jobs as jobs_router
 from .routers import applications as applications_router
 from .routers import webhooks as webhooks_router
+from .routers import payments_webhook as payments_webhook_router
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import threading, time
 import httpx
+
+
+_DB_OK = True
 
 
 def create_app() -> FastAPI:
@@ -51,9 +55,31 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health():
-        with engine.connect() as conn:
-            conn.execute(text("select 1"))
-        return {"status": "ok", "env": settings.ENV}
+        ok = True
+        try:
+            ok = bool(globals().get("_DB_OK", True))
+        except Exception:
+            ok = True
+        return {"status": "ok", "env": settings.ENV, "db": ("ok" if ok else "degraded")}
+
+    @app.on_event("startup")
+    async def _start_db_probe():
+        import threading, time
+
+        def _probe():
+            while True:
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("select 1"))
+                    globals()["_DB_OK"] = True
+                except Exception:
+                    globals()["_DB_OK"] = False
+                time.sleep(5)
+
+        try:
+            threading.Thread(target=_probe, daemon=True).start()
+        except Exception:
+            pass
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
     REQ_DURATION = Histogram(
@@ -86,6 +112,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router.router)
     app.include_router(applications_router.router)
     app.include_router(webhooks_router.router)
+    app.include_router(payments_webhook_router.router)
     
     # Background cron: dispatch scheduled taxi rides (dev-only endpoint)
     def _cron_loop():

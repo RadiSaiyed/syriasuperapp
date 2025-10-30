@@ -66,7 +66,7 @@ def create_request(
         requester_user_id=user.id,
         target_user_id=target.id,
         amount_cents=payload.amount_cents,
-        currency_code="SYP",
+        currency_code=settings.DEFAULT_CURRENCY,
         status="pending",
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),

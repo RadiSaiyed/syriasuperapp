@@ -15,6 +15,7 @@ dependencies:
   web_socket_channel: ^2.4.0
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
+  google_maps_flutter: ^2.9.0
   cached_network_image: ^3.4.1
   geolocator: ^11.1.0
   intl: ^0.20.2
@@ -24,6 +25,8 @@ dependencies:
     path: ../taxi_flutter
   chat_flutter:
     path: ../chat_flutter
+  shared_core:
+    path: ../shared_core
   share_plus: ^10.1.4
   qr_flutter: ^4.1.0
   path_provider: ^2.1.4
@@ -34,6 +37,9 @@ dependencies:
   google_fonts: ^6.2.1
   flutter_dotenv: ^5.2.1
   mobile_scanner: ^7.1.2
+  uni_links: ^0.5.1
+  firebase_core: ^3.15.2
+  firebase_messaging: ^15.2.10
 
 dependency_overrides:
   js: ^0.7.2

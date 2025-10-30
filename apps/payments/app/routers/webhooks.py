@@ -91,10 +91,11 @@ def send_test_event(background: BackgroundTasks, user: User = Depends(get_curren
 
 @router.get("/deliveries")
 def list_deliveries(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    eps = select(WebhookEndpoint.id).where(WebhookEndpoint.user_id == user.id)
+    # Use scalar_subquery() to avoid SAWarning about coercing subqueries in IN()
+    eps_ids = select(WebhookEndpoint.id).where(WebhookEndpoint.user_id == user.id).scalar_subquery()
     ds = (
         db.query(WebhookDelivery)
-        .filter(WebhookDelivery.endpoint_id.in_(eps))
+        .filter(WebhookDelivery.endpoint_id.in_(eps_ids))
         .order_by(WebhookDelivery.created_at.desc())
         .limit(200)
         .all()

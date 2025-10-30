@@ -11,6 +11,14 @@ Env
 - `PROMETHEUS_BASE_URL` (default `http://localhost:9090`)
 - Basic Auth (optional): set `OPS_ADMIN_BASIC_USER` and `OPS_ADMIN_BASIC_PASS`
 
+Push Broadcast (Dev)
+- UI section “Push Broadcast (Dev)” allows sending a topic broadcast via the BFF.
+- Requirements:
+  - `BFF_BASE_URL` env or fill the field in the UI (e.g., `http://localhost:8070`).
+  - Paste a valid Bearer token (any service user JWT) in the UI; endpoints are authenticated.
+  - The BFF supports: `/v1/push/dev/broadcast_topic` with `{topic, title, body, deeplink?}`.
+  - For real delivery, set `FCM_SERVER_KEY` on the BFF; otherwise sends are simulated.
+
 Slack ChatOps (optional)
 - Slash Command endpoint: `POST /slack/command`
 - Env:

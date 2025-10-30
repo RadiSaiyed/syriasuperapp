@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
+import 'package:shared_ui/toast.dart';
 
 class BusBookingScreen extends StatefulWidget {
   final Map<String, dynamic> journey;
@@ -67,7 +68,7 @@ class _BusBookingScreenState extends State<BusBookingScreen> {
               const SizedBox(height: 8),
               FilledButton(
                 onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Booking reserved (demo)')));
+                  showToast(context, 'Booking reserved (demo)');
                 },
                 child: const Text('Reserve'),
               )
@@ -78,4 +79,3 @@ class _BusBookingScreenState extends State<BusBookingScreen> {
     );
   }
 }
-

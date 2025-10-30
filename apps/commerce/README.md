@@ -21,6 +21,17 @@ Features
 - Reviews & ratings (only after purchase)
 - Payments integration (dev/internal)
 
+Payments Integration (Dev)
+- Interne Zahlungen via Payments `/internal/requests` (HMAC‑Header). Erfordert in `.env`:
+  - `PAYMENTS_BASE_URL` (z. B. `http://host.docker.internal:8080`)
+  - `PAYMENTS_INTERNAL_SECRET` (muss `INTERNAL_API_SECRET` der Payments‑App entsprechen)
+- Statuswechsel erfolgt clientseitig; Commerce speichert `payment_request_id`.
+
+Make targets (Dev)
+- `make up` — startet Payments + Commerce (DB/Redis/API)
+- `make e2e` — wählt Demo‑Shop/Produkt, legt in den Warenkorb, Checkout → Payment Request → Annahme in Payments → Orders anzeigen
+- `make down` — stoppt beide Stacks inkl. Volumes
+
 API (selection)
 - Auth: `POST /auth/request_otp`, `POST /auth/verify_otp`
 - Shops: `GET /shops`, `GET /shops/{shop_id}/products?q=&category=`

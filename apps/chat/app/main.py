@@ -16,6 +16,7 @@ from .routers import groups as groups_router
 from .routers import admin as admin_router
 from .routers import presence as presence_router
 from .routers import internal_tools as internal_tools_router
+from .routers import payments_webhook as payments_webhook_router
 from .routers import blocks as blocks_router
 from .ws import router as ws_router
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(blocks_router.router)
     app.include_router(ws_router)
     app.include_router(internal_tools_router.router)
+    app.include_router(payments_webhook_router.router)
     return app
 
 

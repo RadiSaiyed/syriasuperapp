@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/messages.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services.dart';
@@ -10,7 +12,7 @@ Future<bool> ensureLoggedIn(BuildContext context, {String service = 'payments'})
   final t = await getTokenFor(service);
   if (t != null && t.isNotEmpty) return true;
   if (context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bitte zuerst anmelden')));
+    MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context));
     Navigator.of(context).pushNamed('/login');
   }
   return false;
@@ -36,7 +38,7 @@ Future<bool> requireBiometricIfEnabled(BuildContext context, {String? reason}) a
       options: const AuthenticationOptions(biometricOnly: true, stickyAuth: true),
     );
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Abgebrochen')));
+      MessageHost.showInfoBanner(context, SharedMessages.cancelled(context));
     }
     return ok;
   } catch (_) {

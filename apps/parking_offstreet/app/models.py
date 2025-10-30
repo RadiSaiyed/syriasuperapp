@@ -36,6 +36,8 @@ class Reservation(Base):
     to_ts = Column(DateTime, nullable=False)
     price_cents = Column(Integer, nullable=False)
     status = Column(String(16), nullable=False, default="reserved")  # reserved|canceled|checked_in|completed
+    payment_request_id = Column(String(64), nullable=True)
+    payment_transfer_id = Column(String(64), nullable=True)
     qr_code = Column(String(64), nullable=False)  # opaque token
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -55,5 +57,6 @@ class Entry(Base):
     started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     stopped_at = Column(DateTime, nullable=True)
     price_cents = Column(Integer, nullable=True)
+    payment_request_id = Column(String(64), nullable=True)
+    payment_transfer_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-

@@ -130,6 +130,8 @@ class Settings:
     OTP_SMS_TEMPLATE: str = os.getenv("OTP_SMS_TEMPLATE", "Your Taxi verification code is {code}")
     OTP_SMS_HTTP_URL: str = os.getenv("OTP_SMS_HTTP_URL", "")
     OTP_SMS_HTTP_AUTH_TOKEN: str = os.getenv("OTP_SMS_HTTP_AUTH_TOKEN", "")
+    # Dev: optionally hide/disable OTP endpoints
+    DEV_DISABLE_OTP: bool = env_bool("DEV_DISABLE_OTP", default=False)
     # Fraud / Risk controls
     FRAUD_RIDER_WINDOW_SECS: int = int(os.getenv("FRAUD_RIDER_WINDOW_SECS", "60"))
     FRAUD_RIDER_MAX_REQUESTS: int = int(os.getenv("FRAUD_RIDER_MAX_REQUESTS", "6"))

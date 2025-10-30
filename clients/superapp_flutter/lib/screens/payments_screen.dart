@@ -13,14 +13,19 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services.dart';
-import 'qr_scan_screen.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/qr_scan_screen.dart';
+import 'package:shared_ui/glass.dart';
 import 'ai_gateway_screen.dart';
+import 'package:shared_ui/toast.dart';
+import 'package:shared_ui/messages.dart';
+import 'package:shared_ui/message_host.dart';
 
 class PaymentsScreen extends StatefulWidget {
   final String? initialAction; // 'scan' | 'topup'
   final String? view; // 'p2p' to show only P2P section
-  const PaymentsScreen({super.key, this.initialAction, this.view});
+  final String? p2pTo;
+  final String? p2pAmt;
+  const PaymentsScreen({super.key, this.initialAction, this.view, this.p2pTo, this.p2pAmt});
 
   @override
   State<PaymentsScreen> createState() => _PaymentsScreenState();
@@ -71,14 +76,18 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
   Uri _paymentsUri(String path, {Map<String, String>? query}) =>
       ServiceConfig.endpoint('payments', path, query: query);
 
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) => showToast(context, m);
   // Webhooks removed
   @override
   void initState() {
     super.initState();
     _viewMode = widget.view;
+    if (widget.p2pTo != null && widget.p2pTo!.isNotEmpty) {
+      _p2pPhoneCtrl.text = widget.p2pTo!;
+    }
+    if (widget.p2pAmt != null && widget.p2pAmt!.isNotEmpty) {
+      _p2pAmountCtrl.text = widget.p2pAmt!;
+    }
     // Defer actions until first frame
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -95,8 +104,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
   Future<void> _fetchWallet() async {
     final t = await getTokenFor('payments', store: _tokens);
     if (t == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
+      MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context));
       return;
     }
     setState(() => _loading = true);
@@ -108,8 +116,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       setState(() => _balance =
           '${js['wallet']['balance_cents']} ${js['wallet']['currency_code']}');
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Wallet failed: $e')));
+      MessageHost.showErrorBanner(context, 'Wallet failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -128,17 +135,13 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
     if (!bioOk) return;
     final headers = await _paymentsHeaders();
     if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
+      MessageHost.showInfoBanner(context, 'Login first');
       return;
     }
     final to = _p2pPhoneCtrl.text.trim();
     final amtStr = _p2pAmountCtrl.text.trim();
     final amt = int.tryParse(amtStr);
-    if (to.isEmpty || amt == null || amt <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter phone and amount')));
-      return;
-    }
+    if (to.isEmpty || amt == null || amt <= 0) { MessageHost.showInfoBanner(context, 'Enter phone and amount'); return; }
     setState(() => _loading = true);
     try {
       headers['Idempotency-Key'] =
@@ -152,9 +155,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
           }));
       if (res.statusCode >= 400) throw Exception(res.body);
       await _fetchWallet();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('P2P transfer OK')));
+      _toast('P2P transfer OK');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('P2P failed: $e')));
+      MessageHost.showErrorBanner(context, 'P2P failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -175,14 +178,11 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
 
   Future<void> _createRequest() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     final to = _reqPhoneCtrl.text.trim();
     final amt = int.tryParse(_reqAmountCtrl.text.trim());
     final exp = int.tryParse(_reqExpiryCtrl.text.trim());
-    if (to.isEmpty || amt == null || amt <= 0) { _toast('Phone/Amount fehlen'); return; }
+    if (to.isEmpty || amt == null || amt <= 0) { MessageHost.showInfoBanner(context, 'Phone/Amount fehlen'); return; }
     setState(() => _loading = true);
     try {
       final body = {
@@ -200,17 +200,17 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       if (res.statusCode >= 400) throw Exception(res.body);
       _toast('Request erstellt');
       await _loadRequests();
-    } catch (e) { _toast('Create failed: $e'); }
+    } catch (e) { MessageHost.showErrorBanner(context, 'Create failed: $e'); }
     finally { if (mounted) setState(() => _loading = false); }
   }
 
   Future<void> _createSplitRequests() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) { _toast('Login first'); return; }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     final total = int.tryParse(_splitTotalCtrl.text.trim());
-    if (total == null || total <= 0) { _toast('Enter total amount'); return; }
+    if (total == null || total <= 0) { MessageHost.showInfoBanner(context, 'Enter total amount'); return; }
     final phones = _splitPhones.map((c) => c.text.trim()).where((p) => p.isNotEmpty).toList();
-    if (phones.isEmpty) { _toast('Add at least one participant'); return; }
+    if (phones.isEmpty) { MessageHost.showInfoBanner(context, 'Add at least one participant'); return; }
     // Even split
     final n = phones.length;
     final share = total ~/ n;
@@ -234,22 +234,15 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       }
       _toast('Split created: $n requests');
       await _loadRequests();
-    } catch (e) { _toast('Split failed: $e'); }
+    } catch (e) { MessageHost.showErrorBanner(context, 'Split failed: $e'); }
     finally { if (mounted) setState(() => _loading = false); }
   }
 
   Future<void> _createLinkDynamic() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     final amt = int.tryParse(_linkAmountCtrl.text.trim());
-    if (amt == null || amt <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter amount')));
-      return;
-    }
+    if (amt == null || amt <= 0) { MessageHost.showInfoBanner(context, 'Enter amount'); return; }
     setState(() => _loading = true);
     try {
       final res = await http.post(_paymentsUri('/payments/links'),
@@ -261,9 +254,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
         _lastLinkCode = js['code'] as String?;
         if (_lastLinkCode != null) _linkCodeCtrl.text = _lastLinkCode!;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link created')));
+      _toast('Link created');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Create link failed: $e')));
+      MessageHost.showErrorBanner(context, 'Create link failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -271,11 +264,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
 
   Future<void> _createLinkStatic() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     setState(() => _loading = true);
     try {
       final res = await http.post(_paymentsUri('/payments/links'),
@@ -287,9 +276,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
         _lastLinkCode = js['code'] as String?;
         if (_lastLinkCode != null) _linkCodeCtrl.text = _lastLinkCode!;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Static link created')));
+      _toast('Static link created');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Create link failed: $e')));
+      MessageHost.showErrorBanner(context, 'Create link failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -297,16 +286,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
 
   Future<void> _payLink() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     final code = _linkCodeCtrl.text.trim();
-    if (code.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter link code')));
-      return;
-    }
+    if (code.isEmpty) { MessageHost.showInfoBanner(context, 'Enter link code'); return; }
     final amt = int.tryParse(_linkPayAmountCtrl.text.trim());
     setState(() => _loading = true);
     try {
@@ -320,9 +302,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
           body: jsonEncode(body));
       if (res.statusCode >= 400) throw Exception(res.body);
       await _fetchWallet();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link paid')));
+      _toast('Link paid');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Pay link failed: $e')));
+      MessageHost.showErrorBanner(context, 'Pay link failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -330,16 +312,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
 
   Future<void> _createMerchantQr() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     final amt = int.tryParse(_qrAmountCtrl.text.trim());
-    if (amt == null || amt <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter amount')));
-      return;
-    }
+    if (amt == null || amt <= 0) { MessageHost.showInfoBanner(context, 'Enter amount'); return; }
     setState(() => _loading = true);
     try {
       final res = await http.post(_paymentsUri('/payments/merchant/qr'),
@@ -351,7 +326,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       if (!mounted) return;
       await _showQrDialog(title: 'Receiving QR', code: code.isNotEmpty ? code : res.body, amountSyp: amt);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Create QR failed: $e')));
+      MessageHost.showErrorBanner(context, 'Create QR failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -359,11 +334,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
 
   Future<void> _createStaticQr() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     setState(() => _loading = true);
     try {
       // Consumer-presented QR containing user's phone for P2P style payments
@@ -376,7 +347,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       if (!mounted) return;
       await _showQrDialog(title: 'Receiving QR', code: code.isNotEmpty ? code : res.body);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Create static QR failed: $e')));
+      MessageHost.showErrorBanner(context, 'Create static QR failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -467,11 +438,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
     final bioOk = await _confirmBiometric();
     if (!bioOk) return;
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     setState(() => _loading = true);
     try {
       headers['Idempotency-Key'] =
@@ -486,10 +453,10 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       if (res.statusCode >= 400) throw Exception(res.body);
       await _fetchWallet();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('P2P paid')));
+      _toast('P2P paid');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('P2P failed: $e')));
+      MessageHost.showErrorBanner(context, 'P2P failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -500,10 +467,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
     if (code == null || code.isEmpty) return;
     // Try to parse amount from QR/text
     final amt = _parseSypFromQr(code);
-    if (amt == null || amt <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No amount detected in QR')));
-      return;
-    }
+    if (amt == null || amt <= 0) { MessageHost.showInfoBanner(context, 'No amount detected in QR'); return; }
     // Offer to open Payments app via deep link if available
     final uri = Uri.parse('payments://topup?amount=$amt');
     if (await canLaunchUrl(uri)) {
@@ -525,11 +489,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
     final bioOk = await _confirmBiometric();
     if (!bioOk) return;
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     setState(() => _loading = true);
     try {
       final body = <String, dynamic>{
@@ -543,10 +503,10 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       if (res.statusCode >= 400) throw Exception(res.body);
       await _fetchWallet();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Paid successfully')));
+      _toast('Paid successfully');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Pay failed: $e')));
+      MessageHost.showErrorBanner(context, 'Pay failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -630,12 +590,10 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       final file = File('${dir.path}/qr_$ts.png');
       await file.writeAsBytes(png);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Saved: ${file.path}')));
+      _toast('Saved: ${file.path}');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      MessageHost.showErrorBanner(context, 'Save failed: $e');
     }
   }
 
@@ -645,8 +603,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       await Share.shareXFiles([xf], text: 'QR Code');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Share failed: $e')));
+      MessageHost.showErrorBanner(context, 'Share failed: $e');
     }
   }
 
@@ -658,8 +615,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       await Printing.layoutPdf(onLayout: (_) async => doc.save());
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Print failed: $e')));
+      MessageHost.showErrorBanner(context, 'Print failed: $e');
     }
   }
 
@@ -667,11 +623,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
 
   Future<void> _loadTransactions() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     setState(() => _loading = true);
     try {
       final uri = _paymentsUri('/wallet/transactions/page',
@@ -697,7 +649,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
         _txPageSize = (js['page_size'] as int?) ?? _txPageSize;
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Transactions failed: $e')));
+      MessageHost.showErrorBanner(context, 'Transactions failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -707,11 +659,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
 
   Future<void> _loadRequests() async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
       final res = await http.get(_paymentsUri('/requests'), headers: headers);
@@ -722,7 +670,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
         _reqOutgoing = ((js['outgoing'] as List?) ?? []).cast<Map<String, dynamic>>();
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Requests failed: $e')));
+      MessageHost.showErrorBanner(context, 'Requests failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -732,11 +680,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
     final bioOk = await _confirmBiometric();
     if (!bioOk) return;
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
       final r = await http.post(
@@ -745,9 +689,9 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       if (r.statusCode >= 400) throw Exception(r.body);
       await _fetchWallet();
       await _loadRequests();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Request accepted')));
+      _toast('Request accepted');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Accept failed: $e')));
+      MessageHost.showErrorBanner(context, 'Accept failed: $e');
     } finally { if (mounted) setState(() => _loading = false); }
   }
 
@@ -767,27 +711,27 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
 
   Future<void> _rejectRequest(String id) async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Login first'))); return; }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
       final r = await http.post(_paymentsUri('/requests/$id/reject'), headers: headers);
       if (r.statusCode >= 400) throw Exception(r.body);
       await _loadRequests();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reject failed: $e')));
+      MessageHost.showErrorBanner(context, 'Reject failed: $e');
     } finally { if (mounted) setState(() => _loading = false); }
   }
 
   Future<void> _cancelRequest(String id) async {
     final headers = await _paymentsHeaders();
-    if (!headers.containsKey('Authorization')) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Login first'))); return; }
+    if (!headers.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
       final r = await http.post(_paymentsUri('/requests/$id/cancel'), headers: headers);
       if (r.statusCode >= 400) throw Exception(r.body);
       await _loadRequests();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Cancel failed: $e')));
+      MessageHost.showErrorBanner(context, 'Cancel failed: $e');
     } finally { if (mounted) setState(() => _loading = false); }
   }
 

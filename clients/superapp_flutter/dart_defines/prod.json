@@ -1,9 +1,7 @@
 {
+  "SUPERAPP_API_BASE": "https://api.syriasuperapp.com",
   "TAXI_BASE_URL": "https://taxi.syriasuperapp.com",
   "PAYMENTS_BASE_URL": "https://payments.syriasuperapp.com",
   "CHAT_BASE_URL": "https://chat.syriasuperapp.com",
-  "TOMTOM_MAP_KEY": "<replace-with-real-key>",
-  "TOMTOM_TILE_STYLE": "basic/main",
-  "TOMTOM_SHOW_TRAFFIC_FLOW": "false",
-  "TOMTOM_SHOW_TRAFFIC_INCIDENTS": "false"
+  "USE_GOOGLE_MAPS": "true"
 }

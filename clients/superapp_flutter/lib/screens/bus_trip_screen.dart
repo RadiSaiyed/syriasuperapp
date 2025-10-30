@@ -1,11 +1,14 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import '../services.dart';
 import 'bus_booking_detail_screen.dart';
 import '../ui/steering_wheel_icon.dart';
 import '../auth.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
+import 'package:shared_core/shared_core.dart';
+
+import '../ui/errors.dart';
 
 class BusTripScreen extends StatefulWidget {
   final String tripId;
@@ -16,22 +19,13 @@ class BusTripScreen extends StatefulWidget {
 }
 
 class _BusTripScreenState extends State<BusTripScreen> {
-  final _tokens = MultiTokenStore();
+  static const _service = 'bus';
   Map<String, dynamic>? _trip;
   int _seatsTotal = 0;
   Set<int> _reserved = {};
   final Set<int> _selected = {};
   bool _loading = false;
   bool _showSuccess = false;
-
-  Future<Map<String, String>> _busHeaders() =>
-      authHeaders('bus', store: _tokens);
-
-  Uri _busUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('bus', path, query: query);
-
-  Uri _paymentsUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('payments', path, query: query);
 
   Future<void> _showPaymentSuccess() async {
     if (!mounted) return;
@@ -80,27 +74,34 @@ class _BusTripScreenState extends State<BusTripScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final h = await _busHeaders();
-      final r1 = await http.get(_busUri('/trips/${widget.tripId}'), headers: h);
-      if (r1.statusCode >= 400) throw Exception(r1.body);
-      _trip = jsonDecode(r1.body) as Map<String, dynamic>;
-      final r2 = await http.get(_busUri('/trips/${widget.tripId}/seats'), headers: h);
-      if (r2.statusCode >= 400) throw Exception(r2.body);
-      final js2 = jsonDecode(r2.body) as Map<String, dynamic>;
-      _seatsTotal = (js2['seats_total'] as int? ?? 0);
-      _reserved = ((js2['reserved'] as List?) ?? []).map((e) => int.tryParse('$e') ?? 0).toSet();
+      final trip = await serviceGetJson(
+        _service,
+        '/trips/${widget.tripId}',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 5), staleIfOffline: true),
+      );
+      final seats = await serviceGetJson(
+        _service,
+        '/trips/${widget.tripId}/seats',
+        options: const RequestOptions(cacheTtl: Duration(seconds: 20), staleIfOffline: true),
+      );
+      if (!mounted) return;
+      setState(() {
+        _trip = trip;
+        _seatsTotal = (seats['seats_total'] as int? ?? 0);
+        _reserved = ((seats['reserved'] as List?) ?? [])
+            .map((e) => int.tryParse('$e') ?? 0)
+            .toSet();
+      });
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Load failed: $e')));
+      if (!mounted) return;
+      presentError(context, e, message: 'Trip load failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _book() async {
-    if (_selected.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select at least 1 seat')));
-      return;
-    }
+    if (_selected.isEmpty) { MessageHost.showInfoBanner(context, 'Select at least 1 seat'); return; }
     final price = (_trip?['price_cents'] as int? ?? 0);
     final total = price * _selected.length;
     final ok = await showDialog<bool>(
@@ -118,42 +119,61 @@ class _BusTripScreenState extends State<BusTripScreen> {
     setState(() => _loading = true);
     String? bookingId;
     try {
-      // 1) Create booking (reserve seats)
-      final h = await _busHeaders();
-      final body = {
-        'trip_id': widget.tripId,
-        'seats_count': _selected.length,
-        'seat_numbers': _selected.toList(),
-      };
-      final r = await http.post(_busUri('/bookings'), headers: h, body: jsonEncode(body));
-      if (r.statusCode >= 400) throw Exception(r.body);
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
-      bookingId = js['id']?.toString();
-      final toPhone = js['merchant_phone']?.toString();
-      final amount = (js['total_price_cents'] as int? ?? total);
+      // 1) Create booking (reserve seats). Allow offline queueing to create later.
+      final booking = await servicePostJson(
+        _service,
+        '/bookings',
+        body: {
+          'trip_id': widget.tripId,
+          'seats_count': _selected.length,
+          'seat_numbers': _selected.toList(),
+        },
+        options: const RequestOptions(expectValidationErrors: true, idempotent: true, queueIfOffline: true),
+      );
+      bookingId = booking['id']?.toString();
+      final toPhone = booking['merchant_phone']?.toString();
+      final amount = (booking['total_price_cents'] as int? ?? total);
 
       // 2) Pay now from wallet (biometric confirmation if enabled)
+      // If booking was queued offline (no id/id missing), skip payment/confirm and inform user.
+      if (bookingId == null) {
+        if (mounted) {
+          showToast(context, 'Offline – Buchung wird erstellt, sobald Verbindung besteht. Zahlung später möglich.');
+        }
+        return;
+      }
       if (toPhone == null || toPhone.isEmpty) {
         throw Exception('Missing merchant');
       }
       final bioOk = await requireBiometricIfEnabled(context, reason: 'Confirm payment');
       if (!bioOk) throw Exception('Payment canceled');
-      final payHeaders = await authHeaders('payments');
-      payHeaders['Idempotency-Key'] = 'bus-$bookingId-${DateTime.now().millisecondsSinceEpoch}';
-      final pr = await http.post(
-          _paymentsUri('/wallet/transfer'),
-          headers: payHeaders,
-          body: jsonEncode({'to_phone': toPhone, 'amount_cents': amount}));
-      if (pr.statusCode >= 400) {
-        // rollback booking
-        try {
-          await http.post(_busUri('/bookings/$bookingId/cancel'), headers: h);
-        } catch (_) {}
-        throw Exception(pr.body);
+      final idempotencyKey = 'bus-$bookingId-${DateTime.now().millisecondsSinceEpoch}';
+      try {
+        await servicePostJson(
+          'payments',
+          '/wallet/transfer',
+          body: {'to_phone': toPhone, 'amount_cents': amount},
+          options: const RequestOptions(idempotent: true, expectValidationErrors: true),
+        );
+      } catch (error) {
+        if (bookingId != null) {
+          try {
+            await servicePost(
+              _service,
+              '/bookings/$bookingId/cancel',
+              options: const RequestOptions(idempotent: true),
+            );
+          } catch (_) {}
+        }
+        rethrow;
       }
 
       // 3) Confirm booking
-      await http.post(_busUri('/bookings/$bookingId/confirm'), headers: h);
+      await servicePost(
+        _service,
+        '/bookings/$bookingId/confirm',
+        options: const RequestOptions(idempotent: true),
+      );
 
       // 4) Update local seats and show success before navigating to detail
       _reserved.addAll(_selected);
@@ -162,7 +182,8 @@ class _BusTripScreenState extends State<BusTripScreen> {
       await _showPaymentSuccess();
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => BusBookingDetailScreen(bookingId: bookingId!)));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Booking failed: $e')));
+      if (!mounted) return;
+      presentError(context, e, message: 'Booking failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

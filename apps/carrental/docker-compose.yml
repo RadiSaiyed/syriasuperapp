@@ -13,7 +13,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6390:6379"
+      - "6393:6379"
 
   api:
     container_name: carrental-api
@@ -25,7 +25,7 @@ services:
     ports:
       - "8095:8095"
     networks:
-      - internal
+      - default
       - web
     labels:
       - "traefik.enable=true"

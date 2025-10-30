@@ -22,12 +22,16 @@ def create_key(user: User = Depends(get_current_user), db: Session = Depends(get
 
 @router.get("/keys")
 def list_keys(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.is_merchant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Merchant only")
     rows = db.query(MerchantApiKey).filter(MerchantApiKey.user_id == user.id).order_by(MerchantApiKey.created_at.desc()).all()
     return [{"key_id": r.key_id, "created_at": r.created_at.isoformat() + "Z"} for r in rows]
 
 
 @router.delete("/keys/{key_id}")
 def delete_key(key_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.is_merchant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Merchant only")
     rec = db.query(MerchantApiKey).filter(MerchantApiKey.user_id == user.id, MerchantApiKey.key_id == key_id).one_or_none()
     if rec is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -49,12 +53,10 @@ def merchant_transactions(
     user_id = verify_request(db, key_id, sign, ts, str(request.url.path), body)
     if user_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
-    # Scope check
+    # Scope check (default deny)
     rec = db.query(MerchantApiKey).filter(MerchantApiKey.key_id == key_id).one()
-    if not (rec.scope or "").split(","):  # default deny
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-    scopes = set([s.strip() for s in (rec.scope or "").split(",") if s.strip()])
-    if "transactions:read" not in scopes:
+    scopes = {s.strip() for s in (rec.scope or "").split(",") if s.strip()}
+    if not scopes or "transactions:read" not in scopes:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient scope")
     w = db.query(Wallet).filter(Wallet.user_id == user_id).one()
     rows = db.query(LedgerEntry).filter(LedgerEntry.wallet_id == w.id).order_by(LedgerEntry.created_at.desc()).limit(100).all()

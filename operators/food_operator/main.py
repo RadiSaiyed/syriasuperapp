@@ -22,10 +22,13 @@ except Exception:
 
 from app.routers import auth as auth_router
 from app.routers import operator as operator_router
-from app.auth import get_current_user
+from app.auth import get_current_user, create_access_token
 from app.database import get_db
 from app.models import User, Restaurant, Order, OperatorMember
+from app.schemas import TokenOut
 from fastapi import HTTPException, status, Depends
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 
 def create_app() -> FastAPI:
@@ -160,6 +163,37 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router.router)
     app.include_router(operator_router.router)
+
+    class DevLoginIn(BaseModel):
+        username: str
+        password: str
+
+    @app.post("/auth/dev_login_operator", response_model=TokenOut, tags=["auth"])
+    def dev_login_operator(payload: DevLoginIn, db: Session = Depends(get_db)):
+        if settings.ENV.lower() != "dev":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+        users = {
+            "admin": {"password": "admin", "phone": "+963901000001", "name": "Admin"},
+            "superuser": {"password": "super", "phone": "+963901000002", "name": "Super User"},
+            "user1": {"password": "user", "phone": "+963996428955", "name": "User One"},
+            "user2": {"password": "user", "phone": "+963996428996", "name": "User Two"},
+        }
+        u = users.get(payload.username.lower())
+        if not u or payload.password != u["password"]:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        user = db.query(User).filter(User.phone == u["phone"]).one_or_none()
+        if user is None:
+            user = User(phone=u["phone"], name=u.get("name"))
+            db.add(user)
+            db.flush()
+        # Ensure operator membership for portal access
+        mem = db.query(OperatorMember).filter(OperatorMember.user_id == user.id).one_or_none()
+        if mem is None:
+            mem = OperatorMember(user_id=user.id, role="admin")
+            db.add(mem)
+            db.flush()
+        token = create_access_token(str(user.id), user.phone)
+        return TokenOut(access_token=token)
 
     @app.get("/me", tags=["dashboard"])
     def me(user: User = Depends(get_current_user), db = Depends(get_db)):

@@ -30,6 +30,7 @@ from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_
 from .middleware_rate_limit import SlidingWindowLimiter
 from .middleware_rate_limit_redis import RedisRateLimiter
 from .middleware_request_id import RequestIDMiddleware
+from .utils.security_headers import SecurityHeadersMiddleware
 
 
 def create_app() -> FastAPI:
@@ -46,6 +47,8 @@ def create_app() -> FastAPI:
 
     # Request ID + JSON request log
     app.add_middleware(RequestIDMiddleware)
+    # Secure default HTTP headers
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # Rate limiting
     if settings.RATE_LIMIT_BACKEND.lower() == "redis":

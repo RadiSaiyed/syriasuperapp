@@ -12,5 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 
 COPY apps/bus/app /app/app
+COPY apps/bus/alembic.ini /app/
+COPY apps/bus/alembic /app/alembic
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8082"]
+COPY apps/bus/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]

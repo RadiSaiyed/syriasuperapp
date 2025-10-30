@@ -31,6 +31,9 @@ class SlidingWindowLimiter(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+        # Always bypass limiter for health checks to ensure constant-time responses
+        if path == "/health":
+            return await call_next(request)
         now = time.time()
         key = self._key(request)
 
@@ -87,6 +90,9 @@ class RedisRateLimiter(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+        # Always bypass limiter for health checks to ensure constant-time responses
+        if path == "/health":
+            return await call_next(request)
         try:
             base = int(os.getenv("RL_LIMIT_PER_MINUTE_OVERRIDE", str(self.limit_per_minute)))
         except Exception:

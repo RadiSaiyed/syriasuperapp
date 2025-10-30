@@ -12,5 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 
 COPY apps/freight/app /app/app
+COPY apps/freight/alembic.ini /app/
+COPY apps/freight/alembic /app/alembic
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8085"]
+COPY apps/freight/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]

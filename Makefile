@@ -6,7 +6,7 @@ SHELL := /bin/sh
 STAYS_DB_URL ?= postgresql+psycopg2://postgres:postgres@localhost:5441/stays
 FOOD_DB_URL ?= postgresql+psycopg2://postgres:postgres@localhost:5443/food
 
-help:
+	help:
 	@echo "Targets:"
 	@echo "  payments-up  - start Payments (db, redis, api)"
 	@echo "  taxi-up      - start Taxi (db, redis, api)"
@@ -22,6 +22,11 @@ help:
 	@echo "  stays-reset-seed - reset then seed demo data"
 	@echo "  ios-create-ipad - create 'Demo iPad' simulator (best effort)"
 	@echo "  run-superapp-ipad - run Super‑App on 'Demo iPad' simulator"
+	@echo "  ios-create-iphone - create 'Demo iPhone' simulator (best effort)"
+	@echo "  run-superapp-iphone - run Super‑App on 'Demo iPhone' with prod defines"
+	@echo "  bff-up       - start BFF (Backend for Frontend)"
+	@echo "  bff-down     - stop BFF"
+	@echo "  bff-run      - run BFF via Python (local)"
 	@echo "  up-all       - start Payments + Food (db, redis, api)"
 	@echo "  seed-all     - seed demo data (Food)"
 	@echo "  down-all     - stop Payments + Food"
@@ -29,6 +34,7 @@ help:
 	@echo "  prod-env     - generate deploy/.env.prod with strong secrets"
 	@echo "  prod-build   - build & push images (ORG=your_dockerhub_user TAG=$(git rev-parse --short HEAD))"
 	@echo "  prod-deploy  - bring up Traefik + services via deploy compose"
+	@echo "  clean-all    - remove build/cache artifacts repo-wide"
 	@echo "  scaffold-alembic - add Alembic templates to apps/*"
 	@echo "  hetzner-env  - load Hetzner env and prep SSH key"
 	@echo "  hetzner-ssh  - SSH into Hetzner server from .env"
@@ -41,6 +47,7 @@ help:
 	@echo "  hetzner-tf-apply-cloudinit - apply with rendered cloud-init"
 	@echo "  hetzner-tf-apply-dns-zone - apply and create DNS zone (manage_zone=true)"
 	@echo "  hetzner-dns-apply-core - apply DNS for payments,taxi via API"
+	@echo "  hetzner-deploy-remote - rsync compose bundle to Hetzner host and up"
 	@echo "  health       - run monorepo health check (tools/health_check.sh)"
 	@echo "  deploy-health - run health checks against deploy compose (APP=payments|STACK=core)"
 	@echo "  taxi-driver-up - start Taxi Driver operator API"
@@ -140,6 +147,54 @@ run-superapp-ipad:
 	 if [ -z "$$DEVICE" ]; then DEVICE="Demo iPad"; fi; \
 	 cd clients/superapp_flutter && ../../tools/flutter/bin/flutter run -d "$$DEVICE" -t lib/main.dart
 
+ios-create-iphone:
+	@python3 - <<'PY'
+	import json, subprocess
+	rid=''
+	try:
+	    j=json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json']))
+	    ios=[r for r in j.get('runtimes',[]) if r.get('isAvailable') and r.get('identifier','').startswith('com.apple.CoreSimulator.SimRuntime.iOS-')]
+	    ios_sorted=sorted(ios, key=lambda r: r.get('version',''))
+	    rid=(ios_sorted[-1]['identifier'] if ios_sorted else '')
+	except Exception:
+	    pass
+	dt=''
+	try:
+	    j=json.loads(subprocess.check_output(['xcrun','simctl','list','devicetypes','--json']))
+	    types=j.get('devicetypes',[])
+	    pref=[t for t in types if t.get('name')=='iPhone 15 Pro']
+	    dt=(pref[0]['identifier'] if pref else next((t['identifier'] for t in types if t.get('name','').startswith('iPhone')), ''))
+	except Exception:
+	    pass
+	name='Demo iPhone'
+	if rid and dt:
+	    out=subprocess.check_output(['xcrun','simctl','list','devices','available']).decode()
+	    if name not in out:
+	        subprocess.check_call(['xcrun','simctl','create', name, dt, rid])
+	        print('Created', name)
+	else:
+	    print('Could not determine iOS runtime or iPhone device type; skipping creation')
+	PY
+
+run-superapp-iphone:
+	open -a Simulator || true
+	$(MAKE) ios-create-iphone
+	- xcrun simctl boot "Demo iPhone"
+	cd clients/superapp_flutter/ios && pod install || true
+	cd clients/superapp_flutter && ../../tools/flutter/bin/flutter pub get
+	@DEVICE=$$(../../tools/flutter/bin/flutter devices | awk '/Demo iPhone/{print $$1}' | head -n1); \
+	 if [ -z "$$DEVICE" ]; then DEVICE="Demo iPhone"; fi; \
+	cd clients/superapp_flutter && ../../tools/flutter/bin/flutter run -d "$$DEVICE" --release --dart-define-from-file=dart_defines/prod.json
+
+bff-up:
+	cd apps/bff && docker compose up -d --build
+
+bff-down:
+	cd apps/bff && docker compose down || true
+
+bff-run:
+	ENV=dev APP_PORT=8070 PYTHONPATH=. python3 -m apps.bff.app.main
+
 up-all:
 	cd apps/payments && docker compose up -d db redis api
 	cd apps/food && docker compose up -d db redis api
@@ -205,6 +260,40 @@ scaffold-alembic:
 hetzner-env:
 	bash -lc 'source ops/deploy/hetzner/env.sh'
 
+# --- Cleanup helpers ---
+.PHONY: clean-all clean-caches clean-files
+
+clean-caches:
+	@echo "[clean] Removing common cache/build folders..."
+	@find . \
+	  -type d \( \
+	    -name '__pycache__' -o \
+	    -name '.pytest_cache' -o \
+	    -name '.mypy_cache' -o \
+	    -name '.ruff_cache' -o \
+	    -name 'node_modules' -o \
+	    -name 'dist' -o \
+	    -name 'build' -o \
+	    -name '.dart_tool' -o \
+	    -name '.gradle' -o \
+	    -name 'Pods' -o \
+	    -name 'DerivedData' -o \
+	    -name '.parcel-cache' -o \
+	    -name '.turbo' -o \
+	    -name '.next' -o \
+	    -name '.nuxt' -o \
+	    -name '.svelte-kit' -o \
+	    -name '.idea' -o \
+	    -name '.vscode' \
+	  \) -prune -exec rm -rf {} +
+
+clean-files:
+	@echo "[clean] Removing temp files..."
+	@find . -type f \( -name '.DS_Store' -o -name '*.log' -o -name '*.tmp' -o -name '*.swp' -o -name '*.swo' -o -name '*.pid' -o -name '.coverage*' -o -name 'coverage.xml' -o -name 'junit*.xml' \) -delete
+
+clean-all: clean-caches clean-files
+	@echo "[clean] Done."
+
 hetzner-ssh:
 	bash -lc 'source ops/deploy/hetzner/env.sh && USER=${HETZNER_SSH_USER:-root}; if [ -z "${HETZNER_IPV4:-}" ]; then echo "Missing HETZNER_IPV4 in .env" >&2; exit 1; fi; ssh $HETZNER_SSH_OPTS "$$USER@${HETZNER_IPV4}"'
 
@@ -234,6 +323,9 @@ hetzner-tf-apply-dns-zone:
 
 hetzner-dns-apply-core:
 	bash -lc 'source ops/deploy/hetzner/env.sh && python3 ops/deploy/hetzner/dns_apply.py payments taxi'
+
+hetzner-deploy-remote:
+	bash -lc 'ops/deploy/hetzner/remote_deploy.sh'
 
 taxi-driver-up:
 	cd operators/taxi_driver && docker compose up -d db redis api
@@ -297,6 +389,11 @@ payments-merchant-migrate:
 # --- Health helpers ---
 health:
 	bash tools/health_check.sh
+
+# --- iOS Payments demo ---
+.PHONY: ios-payments-demo
+ios-payments-demo:
+	bash tools/start_ios_payments_sims.sh
 
 deploy-health:
 	@set -euo pipefail; \

@@ -12,6 +12,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Use project-default network; avoid shared 'internal' to prevent cross-project collisions
 
   redis:
     image: redis:7-alpine
@@ -23,6 +24,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Redis on project-default network
 
   api:
     container_name: payments-api
@@ -42,7 +44,7 @@ services:
     ports:
       - "${APP_PORT:-8080}:8080"
     networks:
-      - internal
+      - default
       - web
     labels:
       - "traefik.enable=true"
@@ -66,6 +68,8 @@ services:
         condition: service_healthy
     command: ["sh", "-lc", "celery -A app.celery_app:celery_app worker --loglevel=INFO -Q payments"]
     restart: unless-stopped
+    networks:
+      - default
 
   beat:
     build:
@@ -78,6 +82,8 @@ services:
         condition: service_healthy
     command: ["sh", "-lc", "celery -A app.celery_app:celery_app beat --loglevel=INFO"]
     restart: unless-stopped
+    networks:
+      - default
 
 volumes:
   payments_db_data:

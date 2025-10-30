@@ -75,3 +75,37 @@ Notes
 E2E Media Keys
 - Clients encrypt attachments (e.g., AES‑GCM/XChaCha20‑Poly1305) on the client; the server stores only ciphertext or blobs.
 - Keys/nonce/metadata stay client‑side or as an encrypted “envelope” in the payload; the server does not interpret this data.
+
+Payments Integration (optional)
+- Configure in `.env` or docker compose override:
+  - `PAYMENTS_BASE_URL` (e.g., `http://host.docker.internal:8080`)
+  - `PAYMENTS_INTERNAL_SECRET`
+  - `PAYMENTS_WEBHOOK_SECRET`
+- Register a webhook in Payments pointing to Chat:
+  - `POST /webhooks/endpoints` with `url=http://host.docker.internal:8091/payments/webhooks` and your chosen `secret`.
+- Webhook details:
+  - Endpoint: `POST /payments/webhooks`
+  - Headers: `X-Webhook-Event`, `X-Webhook-Ts`, `X-Webhook-Sign`
+  - Signature: `hex(hmac_sha256(secret, ts + event + body))`
+- Chat currently acknowledges events only (no state changes).
+
+Simulate a signed webhook (dev)
+```
+ts=$(date +%s)
+body='{"type":"requests.accept","data":{"id":"PR_ID","transfer_id":"TR_ID"}}'
+sig=$(python3 - <<'PY'
+import hmac,hashlib,os
+secret=os.environ.get('PAYMENTS_WEBHOOK_SECRET','demo_secret')
+ts=os.environ.get('TS','%s')
+event='requests.accept'
+body=os.environ.get('BODY','%s')
+print(hmac.new(secret.encode(),(ts+event).encode()+body.encode(),hashlib.sha256).hexdigest())
+PY
+)
+curl -s -X POST http://localhost:8091/payments/webhooks \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Event: requests.accept" \
+  -H "X-Webhook-Ts: $ts" \
+  -H "X-Webhook-Sign: $sig" \
+  -d "$body" | jq .
+```

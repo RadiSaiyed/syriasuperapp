@@ -1,7 +1,9 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:shared_core/shared_core.dart';
 import '../services.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
+import '../ui/errors.dart';
 
 class AgricultureScreen extends StatefulWidget {
   const AgricultureScreen({super.key});
@@ -19,11 +21,15 @@ class _AgricultureScreenState extends State<AgricultureScreen>
   List<dynamic> _jobs = [];
   List<dynamic> _myOrders = [];
 
-  Future<Map<String, String>> _agriHeaders() =>
-      authHeaders('agriculture');
+  static const _service = 'agriculture';
 
-  Uri _agriUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('agriculture', path, query: query);
+  Future<bool> _ensureAuth() async {
+    final authed = await hasTokenFor(_service);
+    if (!authed && mounted) {
+      MessageHost.showInfoBanner(context, 'Please log in');
+    }
+    return authed;
+  }
 
   @override
   void initState() {
@@ -36,46 +42,68 @@ class _AgricultureScreenState extends State<AgricultureScreen>
 
   Future<void> _healthCheck() async {
     try {
-      final r = await http.get(_agriUri('/health'));
-      final js = jsonDecode(r.body);
+      final js = await serviceGetJson(
+        _service,
+        '/health',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 5), staleIfOffline: true),
+      );
+      if (!mounted) return;
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
+      if (!mounted) return;
       setState(() => _health = 'error');
     }
   }
 
   Future<void> _loadMarket() async {
     try {
-      final r = await http.get(_agriUri('/market/listings'));
-      if (r.statusCode >= 400) throw Exception(r.body);
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
-      setState(() => _listings = js['listings'] as List<dynamic>);
+      final js = await serviceGetJson(
+        _service,
+        '/market/listings',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 10), staleIfOffline: true),
+      );
+      if (!mounted) return;
+      setState(() => _listings = js['listings'] as List<dynamic>? ?? const []);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Failed to load listings');
     }
   }
 
   Future<void> _loadJobs() async {
     try {
-      final r = await http.get(_agriUri('/jobs'));
-      if (r.statusCode >= 400) throw Exception(r.body);
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
-      setState(() => _jobs = js['jobs'] as List<dynamic>);
+      final js = await serviceGetJson(
+        _service,
+        '/jobs',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 10), staleIfOffline: true),
+      );
+      if (!mounted) return;
+      setState(() => _jobs = js['jobs'] as List<dynamic>? ?? const []);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Failed to load jobs');
     }
   }
 
   Future<void> _loadMyOrders() async {
-    final h = await _agriHeaders();
     try {
-      final r = await http.get(_agriUri('/market/orders'), headers: h);
-      if (r.statusCode == 401 || r.statusCode == 403) { _toast('Please log in'); return; }
-      if (r.statusCode >= 400) throw Exception(r.body);
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
-      setState(() => _myOrders = js['orders'] as List<dynamic>);
+      final js = await serviceGetJson(
+        _service,
+        '/market/orders',
+        options: const RequestOptions(expectValidationErrors: true),
+      );
+      if (!mounted) return;
+      setState(() => _myOrders = js['orders'] as List<dynamic>? ?? const []);
+    } on ApiError catch (e) {
+      if (!mounted) return;
+      if (e.kind == CoreErrorKind.unauthorized || e.kind == CoreErrorKind.forbidden) {
+        MessageHost.showInfoBanner(context, 'Please log in');
+        return;
+      }
+      presentError(context, e, message: 'Failed to load orders');
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Failed to load orders');
     }
   }
 
@@ -103,18 +131,22 @@ class _AgricultureScreenState extends State<AgricultureScreen>
       ),
     );
     if (qty == null) return;
-    final h = await _agriHeaders();
-    if (!h.containsKey('Authorization')) { _toast('Please log in'); return; }
+    if (!await _ensureAuth()) return;
     try {
       final id = listing['id'];
-      final r = await http.post(_agriUri('/market/listings/$id/order'),
-          headers: h, body: jsonEncode({'qty_kg': qty}));
-      if (r.statusCode >= 400) throw Exception(r.body);
+      await servicePost(
+        _service,
+        '/market/listings/$id/order',
+        body: {'qty_kg': qty},
+        options: const RequestOptions(expectValidationErrors: true),
+      );
+      if (!mounted) return;
       _toast('Order created');
-      _loadMarket();
-      _loadMyOrders();
+      await _loadMarket();
+      await _loadMyOrders();
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Order failed');
     }
   }
 
@@ -132,24 +164,28 @@ class _AgricultureScreenState extends State<AgricultureScreen>
       ),
     );
     if (message == null) return;
-    final h = await _agriHeaders();
-    if (!h.containsKey('Authorization')) { _toast('Please log in'); return; }
+    if (!await _ensureAuth()) return;
     try {
       final id = job['id'];
-      final r = await http.post(_agriUri('/jobs/$id/apply'),
-          headers: h, body: jsonEncode({'message': message}));
-      if (r.statusCode >= 400) throw Exception(r.body);
+      await servicePost(
+        _service,
+        '/jobs/$id/apply',
+        body: {'message': message},
+        options: const RequestOptions(expectValidationErrors: true),
+      );
+      if (!mounted) return;
       _toast('Application sent');
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Application failed');
     }
   }
 
   // Per-app OTP login removed: use central login
 
   void _toast(String m) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(m)));
+    if (!mounted) return;
+    showToast(context, m);
   }
 
   @override
@@ -276,27 +312,33 @@ class _AgricultureScreenState extends State<AgricultureScreen>
       ),
     );
     if (data == null) return;
-    final h = await authHeaders('agriculture');
-    if (!h.containsKey('Authorization')) { _toast('Please log in'); return; }
+    if (!await _ensureAuth()) return;
     try {
-      final r = await http.post(_agriUri('/farmer/farm'), headers: h, body: jsonEncode(data));
-      if (r.statusCode >= 400) throw Exception(r.body);
+      await servicePost(
+        _service,
+        '/farmer/farm',
+        body: data,
+        options: const RequestOptions(expectValidationErrors: true),
+      );
+      if (!mounted) return;
       _toast('Farm erstellt');
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Farm erstellen fehlgeschlagen');
     }
   }
 
   Future<void> _seed() async {
     try {
-      final r = await http.post(_agriUri('/admin/seed'));
-      if (r.statusCode >= 400) throw Exception(r.body);
+      await servicePost(_service, '/admin/seed');
+      if (!mounted) return;
       _toast('Seed ok');
       await _loadMarket();
       await _loadJobs();
       await _loadMyOrders();
     } catch (e) {
-      _toast('Seed fehlgeschlagen: $e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Seed fehlgeschlagen');
     }
   }
 
@@ -330,15 +372,20 @@ class _AgricultureScreenState extends State<AgricultureScreen>
       ),
     );
     if (data == null) return;
-    final h = await authHeaders('agriculture');
-    if (!h.containsKey('Authorization')) { _toast('Please log in'); return; }
+    if (!await _ensureAuth()) return;
     try {
-      final r = await http.post(_agriUri('/farmer/listings'), headers: h, body: jsonEncode(data));
-      if (r.statusCode >= 400) throw Exception(r.body);
+      await servicePost(
+        _service,
+        '/farmer/listings',
+        body: data,
+        options: const RequestOptions(expectValidationErrors: true),
+      );
+      if (!mounted) return;
       _toast('Listing erstellt');
-      _loadMarket();
+      await _loadMarket();
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Listing erstellen fehlgeschlagen');
     }
   }
 
@@ -375,15 +422,20 @@ class _AgricultureScreenState extends State<AgricultureScreen>
       ),
     );
     if (data == null) return;
-    final h = await authHeaders('agriculture');
-    if (!h.containsKey('Authorization')) { _toast('Please log in'); return; }
+    if (!await _ensureAuth()) return;
     try {
-      final r = await http.post(_agriUri('/farmer/jobs'), headers: h, body: jsonEncode(data));
-      if (r.statusCode >= 400) throw Exception(r.body);
+      await servicePost(
+        _service,
+        '/farmer/jobs',
+        body: data,
+        options: const RequestOptions(expectValidationErrors: true),
+      );
+      if (!mounted) return;
       _toast('Job erstellt');
-      _loadJobs();
+      await _loadJobs();
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Job erstellen fehlgeschlagen');
     }
   }
 }

@@ -102,12 +102,18 @@ def create_app() -> FastAPI:
     app.openapi = custom_openapi
 
     # Minimal auth endpoints (replicates service's main logic)
-    @app.post("/auth/request_otp", tags=["auth"])
+    DISABLE_OTP = settings.DEV_MODE and getattr(settings, "DEV_DISABLE_OTP", False)
+
+    @app.post("/auth/request_otp", tags=["auth"], include_in_schema=not DISABLE_OTP)
     def request_otp(payload: RequestOtpIn):
+        if DISABLE_OTP:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
         return {"detail": "otp_sent"}
 
-    @app.post("/auth/verify_otp", response_model=TokenOut, tags=["auth"])
+    @app.post("/auth/verify_otp", response_model=TokenOut, tags=["auth"], include_in_schema=not DISABLE_OTP)
     def verify_otp(payload: VerifyOtpIn):
+        if DISABLE_OTP:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
         if not _verify_dev_otp(payload.phone, payload.otp):
             from fastapi import HTTPException, status as _status
             raise HTTPException(status_code=_status.HTTP_400_BAD_REQUEST, detail="invalid_otp")
@@ -116,6 +122,34 @@ def create_app() -> FastAPI:
         try:
             u = ensure_user(db, payload.phone, payload.name)
             token = _make_token(str(u.id))
+        finally:
+            db.close()
+        return TokenOut(access_token=token)
+
+    # Dev-only username/password login mirroring service defaults
+    from pydantic import BaseModel
+
+    class DevLoginIn(BaseModel):
+        username: str
+        password: str
+
+    @app.post("/auth/dev_login", response_model=TokenOut, tags=["auth"])
+    def dev_login(payload: DevLoginIn):
+        if settings.ENV.lower() != "dev":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+        users = {
+            "admin": {"password": "admin", "phone": "+963901000001", "name": "Admin"},
+            "superuser": {"password": "super", "phone": "+963901000002", "name": "Super User"},
+            "user1": {"password": "user", "phone": "+963996428955", "name": "User One"},
+            "user2": {"password": "user", "phone": "+963996428996", "name": "User Two"},
+        }
+        u = users.get(payload.username.lower())
+        if not u or payload.password != u["password"]:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        db = next(get_db())
+        try:
+            usr = ensure_user(db, u["phone"], u.get("name"))
+            token = _make_token(str(usr.id))
         finally:
             db.close()
         return TokenOut(access_token=token)

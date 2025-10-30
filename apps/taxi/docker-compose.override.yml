@@ -1,0 +1,17 @@
+services:
+  api:
+    env_file: []
+    volumes:
+      - ./tests:/app/apps/taxi/tests:ro
+      - ../../libs:/app/libs:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      UVICORN_WORKERS: "1"
+      UVICORN_LOG_LEVEL: "warning"
+      # With api now on the project default network, using the service name 'db' is safe and isolated.
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/taxi
+      PYTHONPATH: /app:/app/libs/superapp_shared
+      TAXI_POOL_WALLET_PHONE: ""
+    mem_limit: "2g"
+    networks:
+      - default

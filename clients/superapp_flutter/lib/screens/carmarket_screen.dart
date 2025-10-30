@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../services.dart';
 import 'ai_gateway_screen.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 
 class CarMarketScreen extends StatefulWidget {
   const CarMarketScreen({super.key});
@@ -28,7 +30,7 @@ class _CarMarketScreenState extends State<CarMarketScreen> {
       final js = jsonDecode(r.body);
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     } finally {
       setState(() => _loading = false);
     }
@@ -108,7 +110,7 @@ class _CarMarketScreenState extends State<CarMarketScreen> {
         setState(() => _listings = items);
       }
     } catch (e) {
-      _toast('$e');
+      MessageHost.showErrorBanner(context, '$e');
     } finally {
       setState(() => _loading = false);
     }
@@ -163,9 +165,7 @@ class _CarMarketScreenState extends State<CarMarketScreen> {
     }
   }
 
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { showToast(context, m); }
 
   @override
   Widget build(BuildContext context) {

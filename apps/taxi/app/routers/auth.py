@@ -11,6 +11,7 @@ from superapp_shared import build_client_fingerprint, OTPRateLimitError, OTPLock
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+DISABLE_OTP = settings.ENV.lower() == "dev" and getattr(settings, "DEV_DISABLE_OTP", False)
 
 
 def _fingerprint(request: Request) -> str:
@@ -20,8 +21,10 @@ def _fingerprint(request: Request) -> str:
     )
 
 
-@router.post("/request_otp")
+@router.post("/request_otp", include_in_schema=not DISABLE_OTP)
 def request_otp(payload: RequestOtpIn, request: Request):
+    if DISABLE_OTP:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     if not payload.phone or not payload.phone.startswith("+"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid phone")
     fingerprint = _fingerprint(request)
@@ -40,8 +43,10 @@ def request_otp(payload: RequestOtpIn, request: Request):
     return response
 
 
-@router.post("/verify_otp", response_model=TokenOut)
+@router.post("/verify_otp", response_model=TokenOut, include_in_schema=not DISABLE_OTP)
 def verify_otp(payload: VerifyOtpIn, request: Request, db: Session = Depends(get_db)):
+    if DISABLE_OTP:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     if settings.OTP_MODE == "redis" and not payload.session_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing OTP session")
 
@@ -85,18 +90,22 @@ def dev_login(payload: DevLoginIn, db: Session = Depends(get_db)):
     if settings.ENV.lower() != "dev":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     users = {
-        "driver": {"password": "driver", "phone": "+963900000901", "name": "Test Driver"},
-        "rider": {"password": "rider", "phone": "+963900000801", "name": "Test Rider"},
-        "user1": {"password": "user", "phone": "+963900000101", "name": "User One"},
-        "user2": {"password": "user", "phone": "+963900000102", "name": "User Two"},
+        "driver": {"password": "driver", "phone": "+963900000901", "name": "Test Driver", "role": "driver"},
+        "rider": {"password": "rider", "phone": "+963900000801", "name": "Test Rider", "role": "rider"},
+        "user1": {"password": "user", "phone": "+963900000101", "name": "User One", "role": "rider"},
+        "user2": {"password": "user", "phone": "+963900000102", "name": "User Two", "role": "rider"},
     }
     u = users.get(payload.username.lower())
     if not u or payload.password != u["password"]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     user = db.query(User).filter(User.phone == u["phone"]).one_or_none()
     if user is None:
-        user = User(phone=u["phone"], name=u.get("name"), role="rider")
+        role = u.get("role") or "rider"
+        user = User(phone=u["phone"], name=u.get("name"), role=role)
         db.add(user)
         db.flush()
+    else:
+        if u.get("role") and getattr(user, "role", None) != u.get("role"):
+            user.role = u["role"]
     token = create_access_token(str(user.id), user.phone)
     return TokenOut(access_token=token)

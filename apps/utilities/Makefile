@@ -1,12 +1,35 @@
+SHELL := /bin/sh
+
+compose := docker compose
+compose_dev := docker compose -f docker-compose.yml -f docker-compose.override.yml
+
+.PHONY: run up db down test-container test-one test-host
+
 run:
 	uvicorn app.main:app --host $${APP_HOST:-0.0.0.0} --port $${APP_PORT:-8084} --reload
 
 up:
-	docker compose up --build api
+	$(compose) up --build api
 
 db:
-	docker compose up -d db
+	$(compose) up -d db
 
 down:
-	docker compose down -v
+	$(compose) down -v
 
+# --- Testing helpers ---
+test-container:
+	@echo "[tests] Starting dev deps (db, redis) and running pytest in container...";
+	$(compose_dev) up -d db redis >/dev/null ; \
+	$(compose_dev) run --rm --entrypoint "" api bash -lc 'pytest -q /app/apps/utilities/tests'
+
+test-one:
+	@[ -n "$(F)" ] || (echo "Usage: make test-one F=test_file.py" && exit 1)
+	@echo "[tests] Running single test $(F) in container...";
+	$(compose_dev) up -d db redis >/dev/null ; \
+	$(compose_dev) run --rm --entrypoint "" api bash -lc 'pytest -q /app/apps/utilities/tests/$(F)'
+
+test-host:
+	@set -e; \
+	export PYTHONPATH="$(PWD)/../../libs/superapp_shared"; \
+	pytest -q

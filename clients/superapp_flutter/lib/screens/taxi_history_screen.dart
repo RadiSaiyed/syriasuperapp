@@ -2,9 +2,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:shared_ui/toast.dart';
+import 'package:shared_ui/message_host.dart';
 
 import '../services.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 
 class TaxiHistoryScreen extends StatefulWidget {
   const TaxiHistoryScreen({super.key});
@@ -226,12 +228,10 @@ class _TaxiHistoryScreenState extends State<TaxiHistoryScreen> {
           }));
       if (res.statusCode >= 400) throw Exception(res.body);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Danke für deine Bewertung')));
+      showToast(context, 'Danke für deine Bewertung');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Bewertung fehlgeschlagen: $e')));
+      MessageHost.showErrorBanner(context, 'Bewertung fehlgeschlagen: $e');
     }
   }
 }

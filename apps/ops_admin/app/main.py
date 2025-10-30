@@ -22,6 +22,10 @@ def _prom() -> str:
     return os.getenv("PROMETHEUS_BASE_URL", "http://localhost:9090")
 
 
+def _bff() -> str:
+    return os.getenv("BFF_BASE_URL", "http://localhost:8070")
+
+
 async def prom_query(expr: str) -> float | dict:
     url = f"{_prom()}/api/v1/query"
     async with httpx.AsyncClient(timeout=3.0) as client:
@@ -95,7 +99,7 @@ async def summary(_: bool = Depends(require_basic)):
 @app.get("/")
 async def index(_: bool = Depends(require_basic)):
     # Simple HTML dashboard
-    html = """
+    html = f"""
     <!DOCTYPE html>
     <html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
     <title>Ops Admin</title>
@@ -117,7 +121,40 @@ async def index(_: bool = Depends(require_basic)):
       <h3>Recent Alerts</h3>
       <table id='alerts'><thead><tr><th>Severity</th><th>Alert</th><th>Job</th><th>Since</th></tr></thead><tbody></tbody></table>
     </div>
+    <div class='card' style='margin-top:12px'>
+      <h3>Push Broadcast (Dev)</h3>
+      <div style='display:flex;gap:8px;flex-wrap:wrap'>
+        <input id='bff' placeholder='BFF Base' style='min-width:260px'>
+        <input id='tok' placeholder='Bearer Token' style='min-width:320px'>
+        <button onclick='saveAuth()'>Save</button>
+      </div>
+      <div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px'>
+        <input id='title' placeholder='Title'>
+        <input id='body' placeholder='Body' style='min-width:240px'>
+        <input id='deeplink' placeholder='superapp://... ' style='min-width:260px'>
+      </div>
+      <div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px'>
+        <input id='topic' placeholder='Topic (e.g., offers)'>
+        <button onclick='sendToMe()'>Send to me</button>
+        <button onclick='broadcastTopic()'>Broadcast topic</button>
+        <button onclick='listTopics()'>My topics</button>
+        <button onclick='subscribe()'>Subscribe</button>
+        <button onclick='unsubscribe()'>Unsubscribe</button>
+      </div>
+      <pre id='pushlog' style='white-space:pre-wrap;margin-top:8px'></pre>
+    </div>
     <script>
+    const BFF = '{_bff()}';
+    function _headers(){ const t=localStorage.getItem('bff_token')||''; return { 'Authorization': 'Bearer '+t, 'Content-Type':'application/json' }; }
+    function saveAuth(){ localStorage.setItem('bff_token', document.getElementById('tok').value.trim()); localStorage.setItem('bff_base', document.getElementById('bff').value.trim()); log('Saved auth'); }
+    function base(){ return (document.getElementById('bff').value||localStorage.getItem('bff_base')||BFF).trim(); }
+    function log(msg){ const el=document.getElementById('pushlog'); el.textContent = (new Date()).toISOString()+"\n"+msg; }
+    async function sendToMe(){ try{ const res = await fetch(base()+'/v1/push/dev/send', {method:'POST', headers:_headers(), body: JSON.stringify({title: val('title'), body: val('body'), deeplink: val('deeplink')})}); log(await res.text()); } catch(e){ log(e); } }
+    async function broadcastTopic(){ try{ const res = await fetch(base()+'/v1/push/dev/broadcast_topic', {method:'POST', headers:_headers(), body: JSON.stringify({topic: val('topic'), title: val('title'), body: val('body'), deeplink: val('deeplink')})}); log(await res.text()); } catch(e){ log(e); } }
+    async function subscribe(){ try{ const res = await fetch(base()+'/v1/push/topic/subscribe', {method:'POST', headers:_headers(), body: JSON.stringify({topic: val('topic')})}); log(await res.text()); } catch(e){ log(e); } }
+    async function unsubscribe(){ try{ const res = await fetch(base()+'/v1/push/topic/unsubscribe', {method:'POST', headers:_headers(), body: JSON.stringify({topic: val('topic')})}); log(await res.text()); } catch(e){ log(e); } }
+    async function listTopics(){ try{ const res = await fetch(base()+'/v1/push/topic/list', {headers:_headers()}); log(await res.text()); } catch(e){ log(e); } }
+    function val(id){ return document.getElementById(id).value.trim(); }
     async function load(){
       const s = await fetch('/summary').then(r=>r.json());
       const err = document.getElementById('err'); err.textContent = s.error_rate_percent.toFixed(3) + '%';
@@ -129,6 +166,10 @@ async def index(_: bool = Depends(require_basic)):
       a.slice(0,20).forEach(x=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${x.labels.severity||''}</td><td>${x.labels.alertname||''}</td><td>${x.labels.job||''}</td><td>${x.startsAt||''}</td>`; tb.appendChild(tr); });
     }
     load(); setInterval(load, 5000);
+      // Init auth fields
+      document.getElementById('bff').value = localStorage.getItem('bff_base') || BFF;
+      document.getElementById('tok').value = localStorage.getItem('bff_token') || '';
+    }
     </script>
     </body></html>
     """

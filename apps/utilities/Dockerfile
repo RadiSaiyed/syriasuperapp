@@ -13,5 +13,10 @@ COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 COPY libs/superapp_ai/superapp_ai /app/superapp_ai
 
 COPY apps/utilities/app /app/app
+COPY apps/utilities/alembic.ini /app/
+COPY apps/utilities/alembic /app/alembic
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8084"]
+COPY apps/utilities/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]

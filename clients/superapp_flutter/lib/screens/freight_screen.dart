@@ -1,16 +1,16 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:flutter_map/flutter_map.dart';
+import '../map_view.dart';
 import 'package:latlong2/latlong.dart';
-import '../map_tiles.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import '../apps/freight_api.dart';
+import 'package:shared_ui/toast.dart';
+import 'package:flutter_map/flutter_map.dart';
+import '../ui/errors.dart';
 
 class FreightScreen extends StatefulWidget {
   const FreightScreen({super.key});
@@ -20,15 +20,13 @@ class FreightScreen extends StatefulWidget {
 
 // ignore_for_file: use_build_context_synchronously
 class _FreightScreenState extends State<FreightScreen> {
+  static const _service = 'freight';
   final _api = FreightApi();
   final _tokens = MultiTokenStore();
   String _health = '?';
   bool _loading = false;
   bool _authed = false;
   String _role = 'shipper';
-
-  Uri _freightUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('freight', path, query: query);
 
   @override
   void initState() {
@@ -44,21 +42,18 @@ class _FreightScreenState extends State<FreightScreen> {
   Future<void> _healthCheck() async {
     setState(() => _loading = true);
     try {
-      final r = await http.get(_freightUri('/health'));
-      final js = jsonDecode(r.body);
+      final js = await serviceGetJson(_service, '/health');
+      if (!mounted) return;
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Health check failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   // removed unused _loginDev helper
-
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -157,9 +152,11 @@ class _ShipperPanelState extends State<ShipperPanel> {
     setState(() => _loading = true);
     try {
       final rows = await widget.api.myShipperLoads();
+      if (!mounted) return;
       setState(() => _loads = rows);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Loads fetch failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -179,16 +176,14 @@ class _ShipperPanelState extends State<ShipperPanel> {
       await _refresh();
       _toast('Load posted');
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Create load failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  void _toast(String m) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { if (!mounted) return; showToast(context, m); }
 
   @override
   Widget build(BuildContext context) {
@@ -391,7 +386,8 @@ class _CarrierPanelState extends State<CarrierPanel> {
       await widget.api.carrierApply(companyName: 'Carrier Co');
       _toast('Carrier approved (dev)');
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Carrier apply failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -408,8 +404,11 @@ class _CarrierPanelState extends State<CarrierPanel> {
         minWeight: int.tryParse(_fMinW.text.trim()),
         maxWeight: int.tryParse(_fMaxW.text.trim()),
       );
+      if (!mounted) return;
       setState(() => _available = rows);
-    } catch (_) {
+    } catch (e) {
+      if (!mounted) return;
+      presentError(context, e, message: 'Loads refresh failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -419,9 +418,11 @@ class _CarrierPanelState extends State<CarrierPanel> {
     setState(() => _loading = true);
     try {
       final l = await widget.api.acceptLoad(id);
+      if (!mounted) return;
       setState(() => _current = l);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Load acceptance failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -432,9 +433,11 @@ class _CarrierPanelState extends State<CarrierPanel> {
     setState(() => _loading = true);
     try {
       final l = await widget.api.pickupLoad(_current!['id'] as String);
+      if (!mounted) return;
       setState(() => _current = l);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Pickup failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -445,9 +448,11 @@ class _CarrierPanelState extends State<CarrierPanel> {
     setState(() => _loading = true);
     try {
       final l = await widget.api.inTransitLoad(_current!['id'] as String);
+      if (!mounted) return;
       setState(() => _current = l);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Update to in-transit failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -458,13 +463,15 @@ class _CarrierPanelState extends State<CarrierPanel> {
     setState(() => _loading = true);
     try {
       final l = await widget.api.deliverLoad(_current!['id'] as String);
+      if (!mounted) return;
       setState(() {
         _current = l;
         _paymentId = l['payment_request_id'] as String?;
       });
       if (_paymentId != null) await _showPaymentCta(_paymentId!);
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Delivery update failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -483,7 +490,8 @@ class _CarrierPanelState extends State<CarrierPanel> {
       } catch (_) {}
       await _saveLocation();
     } catch (e) {
-      _toast('$e');
+      if (!mounted) return;
+      presentError(context, e, message: 'Update location failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -598,8 +606,7 @@ class _CarrierPanelState extends State<CarrierPanel> {
                           msgCtrl.clear();
                           await reload();
                         } catch (e) {
-                          ScaffoldMessenger.of(ctx)
-                              .showSnackBar(SnackBar(content: Text('$e')));
+                          presentError(ctx, e, message: 'Chat send failed');
                         }
                       },
                       child: const Text('Send'))
@@ -668,7 +675,7 @@ class _CarrierPanelState extends State<CarrierPanel> {
 
   void _toast(String m) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+    showToast(context, m);
   }
 
   @override
@@ -685,42 +692,17 @@ class _CarrierPanelState extends State<CarrierPanel> {
             final center = LatLng(lat, lon);
             final oc = _findCity(_current?['origin'] as String?);
             final dc = _findCity(_current?['destination'] as String?);
-            if (!tomTomConfigured()) {
-              return tomTomMissingKeyPlaceholder();
-            }
-            return FlutterMap(
-              mapController: _mapCtrl,
-              options: MapOptions(initialCenter: center, initialZoom: 11),
-              children: [
-                ...tomTomTileLayers(showTrafficFlow: false),
+            return SuperMapView(
+              center: center,
+              zoom: 11,
+              markers: [
+                MapMarker(point: center, color: Colors.redAccent, size: 36),
+                if (oc != null) MapMarker(point: oc, color: Colors.green, size: 30),
+                if (dc != null) MapMarker(point: dc, color: Colors.blue, size: 30),
+              ],
+              polylines: [
                 if (oc != null && dc != null)
-                  PolylineLayer(polylines: [
-                    Polyline(
-                        points: [oc, dc],
-                        strokeWidth: 4,
-                        color: Colors.blueAccent),
-                  ]),
-                MarkerLayer(markers: [
-                  Marker(
-                      point: center,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(Icons.local_shipping,
-                          color: Colors.redAccent)),
-                  if (oc != null)
-                    Marker(
-                        point: oc,
-                        width: 30,
-                        height: 30,
-                        child: const Icon(Icons.flag, color: Colors.green)),
-                  if (dc != null)
-                    Marker(
-                        point: dc,
-                        width: 30,
-                        height: 30,
-                        child:
-                            const Icon(Icons.location_on, color: Colors.blue)),
-                ]),
+                  MapPolyline(points: [oc, dc], color: Colors.blueAccent, width: 4),
               ],
             );
           }),

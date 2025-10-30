@@ -5,7 +5,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: flights
     ports:
-      - "5436:5432"
+      - "5445:5432"
     volumes:
       - flights_db_data:/var/lib/postgresql/data
 
@@ -19,7 +19,7 @@ services:
     ports:
       - "8092:8092"
     networks:
-      - internal
+      - default
       - web
     labels:
       - "traefik.enable=true"
@@ -38,7 +38,14 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6382:6379"
+      - "6391:6379"
 
 volumes:
   flights_db_data:
+networks:
+  web:
+    external: true
+    name: web
+  internal:
+    external: true
+    name: internal

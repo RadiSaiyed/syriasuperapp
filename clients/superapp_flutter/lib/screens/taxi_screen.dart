@@ -2,18 +2,18 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import 'package:http/http.dart' as http;
 import '../services.dart';
 import 'profile_screen.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import '../map_tiles.dart';
+import '../map_view.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/messages.dart';
+import 'package:shared_ui/toast.dart';
 
-const bool _tomTomShowTrafficFlow =
-    bool.fromEnvironment('TOMTOM_SHOW_TRAFFIC_FLOW', defaultValue: true);
-const bool _tomTomShowTrafficIncidents =
-    bool.fromEnvironment('TOMTOM_SHOW_TRAFFIC_INCIDENTS', defaultValue: false);
+const bool _mapShowTraffic =
+    bool.fromEnvironment('MAPS_SHOW_TRAFFIC', defaultValue: true);
 
 class TaxiScreen extends StatefulWidget {
   const TaxiScreen({super.key});
@@ -32,42 +32,19 @@ class _MiniMap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final center = pickup ?? dropoff ?? const LatLng(33.5138, 36.2765);
-    if (!tomTomConfigured()) {
-      return tomTomMissingKeyPlaceholder();
-    }
-
-    final mapLayers = <Widget>[
-      ...tomTomTileLayers(
-        showTrafficFlow: _tomTomShowTrafficFlow,
-        showTrafficIncidents: _tomTomShowTrafficIncidents,
-      ),
-      MarkerLayer(markers: [
-        if (pickup != null)
-          Marker(
-            point: pickup!,
-            width: 32,
-            height: 32,
-            child: const Icon(Icons.place, color: Colors.green, size: 28),
-          ),
-        if (dropoff != null)
-          Marker(
-            point: dropoff!,
-            width: 32,
-            height: 32,
-            child: const Icon(Icons.flag, color: Colors.red, size: 28),
-          ),
-      ]),
-    ];
-
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
-      child: FlutterMap(
-        options: MapOptions(
-          initialCenter: center,
-          initialZoom: 13,
-          onTap: (tapPos, ll) => onTap(ll.latitude, ll.longitude),
-        ),
-        children: mapLayers,
+      child: SuperMapView(
+        center: center,
+        zoom: 13,
+        onTap: (lat, lon) => onTap(lat, lon),
+        showTraffic: _mapShowTraffic,
+        markers: [
+          if (pickup != null)
+            MapMarker(point: pickup!, color: Colors.green, size: 28),
+          if (dropoff != null)
+            MapMarker(point: dropoff!, color: Colors.red, size: 28),
+        ],
       ),
     );
   }
@@ -103,11 +80,7 @@ class _TaxiScreenState extends State<TaxiScreen> {
 
   Future<void> _quoteRide() async {
     final t = await getTokenFor('taxi', store: _tokens);
-    if (t == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (t == null) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     setState(() => _loading = true);
     try {
       final body = {
@@ -125,8 +98,7 @@ class _TaxiScreenState extends State<TaxiScreen> {
           (js['final_quote_cents'] ?? js['quoted_fare_cents']) as int? ?? 0;
       setState(() => _quote = '${_fmtSyp(price)}, ${js['distance_km']} km');
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Quote failed: $e')));
+      MessageHost.showErrorBanner(context, 'Quote failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -192,7 +164,7 @@ class _TaxiScreenState extends State<TaxiScreen> {
       await _loadFavorites();
       _toast('Saved');
     } catch (e) {
-      _toast('Error: $e');
+      MessageHost.showErrorBanner(context, 'Error: $e');
     }
   }
 
@@ -248,21 +220,18 @@ class _TaxiScreenState extends State<TaxiScreen> {
       final r = await http.delete(_taxiUri('/favorites/$id'),
           headers: await _taxiHeaders());
       if (r.statusCode >= 400) {
-        _toast('Delete failed: ${r.body}');
-        return;
+      MessageHost.showErrorBanner(context, 'Delete failed: ${r.body}');
+      return;
       }
       setState(() => _favorites.removeWhere((e) => e['id'] == id));
     } catch (e) {
-      _toast('Error: $e');
+      MessageHost.showErrorBanner(context, 'Error: $e');
     }
   }
 
   Future<void> _requestAndPrepay() async {
     final t = await getTokenFor('taxi', store: _tokens);
-    if (t == null) {
-      _toast('Login first');
-      return;
-    }
+    if (t == null) { MessageHost.showInfoBanner(context, SharedMessages.loginFirst(context)); return; }
     if (_pickLat == null ||
         _pickLon == null ||
         _dropLat == null ||
@@ -312,13 +281,13 @@ class _TaxiScreenState extends State<TaxiScreen> {
         }();
         final detail = js?['detail'];
         if (detail is Map && detail['code'] == 'insufficient_rider_balance') {
-          _toast('Insufficient rider balance in Payments. Please top up.');
+          MessageHost.showInfoBanner(context, 'Insufficient rider balance in Payments. Please top up.');
         } else {
-          _toast('Request failed: ${rRes.body}');
+          MessageHost.showErrorBanner(context, 'Request failed: ${rRes.body}');
         }
       }
     } catch (e) {
-      _toast('Request error: $e');
+      MessageHost.showErrorBanner(context, 'Request error: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -326,10 +295,7 @@ class _TaxiScreenState extends State<TaxiScreen> {
 
   Future<void> _scheduleRide() async {
     final t = await getTokenFor('taxi', store: _tokens);
-    if (t == null) {
-      _toast('Login first');
-      return;
-    }
+    if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     if (_pickLat == null ||
         _pickLon == null ||
         _dropLat == null ||
@@ -507,28 +473,22 @@ Top up shortfall now? (${_fmtSyp(shortfall)})''');
       _rideStatus = 'enroute';
       _toast('Ride started');
     } catch (e) {
-      _toast('Start failed: $e');
+      MessageHost.showErrorBanner(context, 'Start failed: $e');
     }
   }
 
   Future<void> _completeRide() async {
     final id = _rideId;
-    if (id == null) {
-      _toast('No ride');
-      return;
-    }
+    if (id == null) { MessageHost.showInfoBanner(context, 'No ride'); return; }
     try {
-      if (!_canComplete()) {
-        _toast('Not near dropoff yet');
-        return;
-      }
+      if (!_canComplete()) { MessageHost.showInfoBanner(context, 'Not near dropoff yet'); return; }
       final r = await http.post(_taxiUri('/rides/$id/complete'),
           headers: await _taxiHeaders());
       if (r.statusCode >= 400) throw Exception(r.body);
       _rideStatus = 'completed';
       _toast('Ride completed');
     } catch (e) {
-      _toast('Complete failed: $e');
+      MessageHost.showErrorBanner(context, 'Complete failed: $e');
     }
   }
 
@@ -547,7 +507,7 @@ Top up shortfall now? (${_fmtSyp(shortfall)})''');
       setState(() => _last =
           'Balance: ${_fmtSyp(bal)}\nLast fee: ${fee != null ? jsonEncode(fee) : 'none'}');
     } catch (e) {
-      _toast('Wallet failed: $e');
+      MessageHost.showErrorBanner(context, 'Wallet failed: $e');
     }
   }
 
@@ -570,10 +530,7 @@ Top up shortfall now? (${_fmtSyp(shortfall)})''');
     return ok == true;
   }
 
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+  void _toast(String msg) { if (!mounted) return; showToast(context, msg); }
 
   // ----- Driver Online & Auto-Location -----
   Future<void> _setDriverOnline(bool online) async {

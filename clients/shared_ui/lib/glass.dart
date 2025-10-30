@@ -259,6 +259,16 @@ class LiquidGlassOverlay extends StatelessWidget {
   }
 }
 
+class GlassCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsets margin;
+  const GlassCard({super.key, required this.child, this.margin = const EdgeInsets.symmetric(horizontal: 12, vertical: 8)});
+  @override
+  Widget build(BuildContext context) {
+    return Glass(margin: margin, child: child);
+  }
+}
+
 class FrostNoise extends StatelessWidget {
   final double opacity;
   final double scale;

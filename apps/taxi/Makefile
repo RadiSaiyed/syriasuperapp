@@ -1,9 +1,10 @@
 SHELL := /bin/sh
 
 compose := docker compose
+compose_dev := docker compose -f docker-compose.yml -f docker-compose.override.yml
 DB_URL_COMPOSE := postgresql+psycopg2://postgres:postgres@db:5432/taxi
 
-.PHONY: up-db build migrate up-api logs health down clean e2e
+.PHONY: up-db build migrate up-api logs health down clean e2e test-container test-one test-host
 
 up-db:
 	$(compose) up -d db
@@ -31,6 +32,23 @@ down:
 
 clean:
 	$(compose) down -v
+
+# --- Testing helpers ---
+test-container:
+	@echo "[tests] Starting dev deps (db, redis) and running pytest in container...";
+	$(compose_dev) up -d db redis >/dev/null ; \
+	$(compose_dev) run --rm --entrypoint "" api bash -lc 'pytest -q /app/apps/taxi/tests'
+
+test-one:
+	@[ -n "$(F)" ] || (echo "Usage: make test-one F=test_file.py" && exit 1)
+	@echo "[tests] Running single test $(F) in container...";
+	$(compose_dev) up -d db redis >/dev/null ; \
+	$(compose_dev) run --rm --entrypoint "" api bash -lc 'pytest -q /app/apps/taxi/tests/$(F)'
+
+test-host:
+	@set -e; \
+	export PYTHONPATH="$(PWD)/../../libs/superapp_shared"; \
+	pytest -q
 
 e2e:
 	@set -e; \

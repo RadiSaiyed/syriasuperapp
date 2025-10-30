@@ -14,5 +14,10 @@ COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 COPY libs/superapp_ai/superapp_ai /app/superapp_ai
 
 COPY apps/carmarket/app /app/app
+COPY apps/carmarket/alembic.ini /app/
+COPY apps/carmarket/alembic /app/alembic
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8086"]
+COPY apps/carmarket/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]

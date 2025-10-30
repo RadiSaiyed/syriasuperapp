@@ -1,9 +1,13 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 import '../services.dart';
 import 'bus_ticket_screen.dart';
+import 'package:shared_core/shared_core.dart';
+import 'dart:convert';
+
+import '../ui/errors.dart';
 
 class BusBookingDetailScreen extends StatefulWidget {
   final String bookingId;
@@ -14,20 +18,14 @@ class BusBookingDetailScreen extends StatefulWidget {
 }
 
 class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
-  final _tokens = MultiTokenStore();
+  static const _service = 'bus';
   Map<String, dynamic>? _booking;
   bool _loading = false;
   bool _paying = false;
   bool _showSuccess = false;
   bool _ratingInFlight = false;
-
-  Future<Map<String, String>> _busHeaders() =>
-      authHeaders('bus', store: _tokens);
-
-  Uri _busUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('bus', path, query: query);
-
-  Uri _paymentsUri(String path) => ServiceConfig.endpoint('payments', path);
+  bool _queuedConfirm = false;
+  bool _queuedPayment = false;
 
   Future<void> _showPaymentSuccess() async {
     if (!mounted) return;
@@ -41,31 +39,153 @@ class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
   void initState() {
     super.initState();
     _load();
+    _checkQueued();
   }
 
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final headers = await _busHeaders();
-      final r = await http.get(
-        _busUri('/bookings/${widget.bookingId}'),
-        headers: headers,
+      final booking = await serviceGetJson(
+        _service,
+        '/bookings/${widget.bookingId}',
+        options: const RequestOptions(expectValidationErrors: true, cacheTtl: Duration(seconds: 30), staleIfOffline: true),
       );
-      if (r.statusCode >= 400) throw Exception(r.body);
-      _booking = jsonDecode(r.body) as Map<String, dynamic>;
-      setState(() {});
+      if (!mounted) return;
+      setState(() => _booking = booking);
       // Auto-fetch ticket QR if confirmed
-      if ((_booking?['status'] ?? '').toString().toLowerCase() == 'confirmed') {
+      if ((booking['status'] ?? '').toString().toLowerCase() == 'confirmed') {
         await _ticket();
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Load failed: $e')));
-      }
+      if (!mounted) return;
+      presentError(context, e, message: 'Load failed');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _checkQueued() async {
+    try {
+      final busQ = await OfflineRequestQueue('bus').load();
+      final payQ = await OfflineRequestQueue('payments').load();
+      final hasConfirm = busQ.any((e) => e.method.toUpperCase() == 'POST' && e.path.contains('/bookings/${widget.bookingId}/confirm'));
+      final hasPayment = payQ.any((e) => e.method.toUpperCase() == 'POST' && e.path.contains('/wallet/transfer'));
+      if (mounted) setState(() { _queuedConfirm = hasConfirm; _queuedPayment = hasPayment; });
+    } catch (_) {}
+  }
+
+  Future<void> _retryConfirm() async {
+    try {
+      final q = OfflineRequestQueue('bus');
+      final items = await q.load();
+      bool changed = false;
+      for (int i = 0; i < items.length; i++) {
+        final it = items[i];
+        if (it.method.toUpperCase() != 'POST' || !it.path.contains('/bookings/${widget.bookingId}/confirm')) {
+          continue;
+        }
+        final client = SharedHttpClient(
+          service: 'bus',
+          baseUrl: ServiceConfig.baseUrl('bus'),
+          tokenProvider: (svc) => MultiTokenStore().get(svc),
+          connectivity: ConnectivityService(),
+        );
+        try {
+          await client.send(CoreHttpRequest(
+            method: it.method,
+            path: it.path,
+            body: it.bodyText,
+            options: RequestOptions(
+              queryParameters: it.query,
+              idempotent: true,
+              idempotencyKey: it.idempotencyKey,
+              attachAuthHeader: true,
+              expectValidationErrors: it.expectValidationErrors,
+              headers: it.contentType == null ? null : {'Content-Type': it.contentType!},
+            ),
+          ));
+          await OfflineQueueHistoryStore().appendFromQueued('bus', it, 'sent');
+          await q.removeAt(i);
+          changed = true;
+        } catch (e) {
+          if (e is CoreError && !e.isRetriable) {
+            await OfflineQueueHistoryStore().appendFromQueued('bus', it, 'removed');
+            await q.removeAt(i);
+            changed = true;
+          } else {
+            client.close();
+            break;
+          }
+        } finally {
+          client.close();
+        }
+      }
+      if (changed) {
+        await _checkQueued();
+        await _load();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _retryPayment() async {
+    final b = _booking;
+    if (b == null) return;
+    final toPhone = (b['merchant_phone'] ?? '').toString();
+    final amount = (b['total_price_cents'] ?? 0) as int;
+    try {
+      final q = OfflineRequestQueue('payments');
+      final items = await q.load();
+      for (int i = 0; i < items.length; i++) {
+        final it = items[i];
+        if (it.method.toUpperCase() != 'POST' || !it.path.contains('/wallet/transfer')) continue;
+        bool match = false;
+        try {
+          if (it.bodyText != null && it.bodyText!.isNotEmpty) {
+            final m = jsonDecode(it.bodyText!) as Map<String, dynamic>;
+            final amt = (m['amount_cents'] as num?)?.toInt();
+            final tp = m['to_phone']?.toString();
+            match = (amt == amount && tp == toPhone);
+          }
+        } catch (_) {}
+        if (!match) continue;
+        final client = SharedHttpClient(
+          service: 'payments',
+          baseUrl: ServiceConfig.baseUrl('payments'),
+          tokenProvider: (svc) => MultiTokenStore().get(svc),
+          connectivity: ConnectivityService(),
+        );
+        try {
+          await client.send(CoreHttpRequest(
+            method: it.method,
+            path: it.path,
+            body: it.bodyText,
+            options: RequestOptions(
+              queryParameters: it.query,
+              idempotent: true,
+              idempotencyKey: it.idempotencyKey,
+              attachAuthHeader: true,
+              expectValidationErrors: it.expectValidationErrors,
+              headers: it.contentType == null ? null : {'Content-Type': it.contentType!},
+            ),
+          ));
+          await OfflineQueueHistoryStore().appendFromQueued('payments', it, 'sent');
+          await q.removeAt(i);
+          // continue to flush any other duplicates
+        } catch (e) {
+          if (e is CoreError && !e.isRetriable) {
+            await OfflineQueueHistoryStore().appendFromQueued('payments', it, 'removed');
+            await q.removeAt(i);
+          } else {
+            client.close();
+            break;
+          }
+        } finally {
+          client.close();
+        }
+      }
+      await _checkQueued();
+      await _load();
+    } catch (_) {}
   }
 
   Future<void> _ticket() async {
@@ -75,19 +195,14 @@ class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
       final confirmed =
           ((b?['status'] ?? '').toString().toLowerCase() == 'confirmed');
       if (!confirmed) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Ticket available after payment')));
-        }
+        if (mounted) { MessageHost.showInfoBanner(context, 'Ticket available after payment'); }
         return;
       }
-      final headers = await _busHeaders();
-      final r = await http.get(
-        _busUri('/bookings/${widget.bookingId}/ticket'),
-        headers: headers,
+      final js = await serviceGetJson(
+        _service,
+        '/bookings/${widget.bookingId}/ticket',
+        options: const RequestOptions(expectValidationErrors: true, cacheTtl: Duration(minutes: 5), staleIfOffline: true),
       );
-      if (r.statusCode >= 400) throw Exception(r.body);
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
       final qr = js['qr_text']?.toString() ?? '';
       if (!mounted) return;
       Navigator.push(
@@ -96,10 +211,8 @@ class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
               builder: (_) =>
                   BusTicketScreen(bookingId: widget.bookingId, qrText: qr)));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Ticket failed: $e')));
-      }
+      if (!mounted) return;
+      presentError(context, e, message: 'Ticket failed');
     }
   }
 
@@ -109,40 +222,35 @@ class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
     final toPhone = (b['merchant_phone'] ?? '').toString();
     final amount = (b['total_price_cents'] ?? 0) as int;
     if (toPhone.isEmpty || amount <= 0) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Missing merchant or amount')));
-      }
+      if (mounted) { MessageHost.showInfoBanner(context, 'Missing merchant or amount'); }
       return;
     }
     setState(() => _paying = true);
     try {
-      final headers = await authHeaders('payments');
-      headers['Idempotency-Key'] =
+      final idempotencyKey =
           'bus-${widget.bookingId}-${DateTime.now().millisecondsSinceEpoch}';
-      final body = jsonEncode({'to_phone': toPhone, 'amount_cents': amount});
-      final r = await http.post(_paymentsUri('/wallet/transfer'),
-          headers: headers, body: body);
-      if (r.statusCode >= 400) {
-        throw Exception(r.body);
-      }
-      // Confirm booking in Bus backend
-      final busHeaders = await _busHeaders();
-      await http.post(_busUri('/bookings/${widget.bookingId}/confirm'),
-          headers: busHeaders);
+      await servicePostJson(
+        'payments',
+        '/wallet/transfer',
+        body: {'to_phone': toPhone, 'amount_cents': amount},
+        options: RequestOptions(
+          headers: {'Idempotency-Key': idempotencyKey},
+          expectValidationErrors: true,
+        ),
+      );
+      await servicePost(
+        _service,
+        '/bookings/${widget.bookingId}/confirm',
+        options: const RequestOptions(idempotent: true),
+      );
       // Show success checkmark before loading ticket
       await _showPaymentSuccess();
       await _load();
       await _ticket();
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Paid and confirmed')));
-      }
+      if (mounted) { showToast(context, 'Paid and confirmed'); }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Pay failed: $e')));
-      }
+      if (!mounted) return;
+      presentError(context, e, message: 'Pay failed');
     } finally {
       if (mounted) setState(() => _paying = false);
     }
@@ -150,21 +258,16 @@ class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
 
   Future<void> _cancel() async {
     try {
-      final headers = await _busHeaders();
-      final r = await http.post(
-          _busUri('/bookings/${widget.bookingId}/cancel'),
-          headers: headers);
-      if (r.statusCode >= 400) throw Exception(r.body);
+      await servicePost(
+        _service,
+        '/bookings/${widget.bookingId}/cancel',
+        options: const RequestOptions(idempotent: true),
+      );
       await _load();
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Canceled')));
-      }
+      if (mounted) { MessageHost.showInfoBanner(context, 'Canceled'); }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Cancel failed: $e')));
-      }
+      if (!mounted) return;
+      presentError(context, e, message: 'Cancel failed');
     }
   }
 
@@ -245,25 +348,24 @@ class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
                         if (mounted) {
                           setState(() => _ratingInFlight = true);
                         }
-                        final headers = await _busHeaders();
-                        final body = jsonEncode({
-                          'rating': rating,
-                          if (ctrl.text.trim().isNotEmpty)
-                            'comment': ctrl.text.trim(),
-                        });
-                        final res = await http.post(
-                            _busUri('/bookings/${widget.bookingId}/rate'),
-                            headers: headers,
-                            body: body);
-                        if (res.statusCode >= 400) {
-                          throw Exception(res.body);
-                        }
+                        await servicePost(
+                          _service,
+                          '/bookings/${widget.bookingId}/rate',
+                          body: {
+                            'rating': rating,
+                            if (ctrl.text.trim().isNotEmpty)
+                              'comment': ctrl.text.trim(),
+                          },
+                          options: const RequestOptions(
+                            expectValidationErrors: true,
+                            idempotent: true,
+                          ),
+                        );
                         if (ctx.mounted) Navigator.pop(ctx, true);
                       } catch (e) {
                         setDlg(() => saving = false);
                         if (ctx.mounted) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                              content: Text('Bewertung fehlgeschlagen: $e')));
+                          presentError(ctx, e, message: 'Bewertung fehlgeschlagen');
                         }
                       } finally {
                         if (mounted) {
@@ -286,8 +388,7 @@ class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
     if (ok == true) {
       await _load();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Danke für deine Bewertung')));
+      showToast(context, 'Danke für deine Bewertung');
     }
   }
 
@@ -378,6 +479,28 @@ class _BusBookingDetailScreenState extends State<BusBookingDetailScreen> {
                               child: const Text('Pay Now')),
                         ],
                       ),
+                      if (_queuedPayment || _queuedConfirm)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _queuedPayment && _queuedConfirm
+                                      ? 'Hinweis: Zahlung und Bestätigung ausstehend.'
+                                      : _queuedPayment
+                                          ? 'Hinweis: Zahlung ausstehend.'
+                                          : 'Hinweis: Bestätigung ausstehend.',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                              if (_queuedPayment)
+                                TextButton(onPressed: _retryPayment, child: const Text('Zahlung jetzt senden')),
+                              if (_queuedConfirm)
+                                TextButton(onPressed: _retryConfirm, child: const Text('Bestätigen')),
+                            ],
+                          ),
+                        ),
                       const SizedBox(height: 12),
                       const Text(
                           'Pay and confirm to receive your ticket (QR check‑in).'),

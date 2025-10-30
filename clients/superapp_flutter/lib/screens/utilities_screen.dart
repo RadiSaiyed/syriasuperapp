@@ -1,10 +1,14 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter/material.dart';
 import '../services.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 import '../auth.dart';
 import 'profile_screen.dart';
 import 'ai_gateway_screen.dart';
+import 'package:shared_core/shared_core.dart';
+import '../animations.dart';
 
 class UtilitiesScreen extends StatefulWidget {
   const UtilitiesScreen({super.key});
@@ -40,25 +44,21 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
         if (headers != null) ...headers,
       };
 
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { showToast(context, m); }
 
   Future<void> _listBillers() async {
-    final t = await getTokenFor('utilities', store: _tokens);
-    if (t == null) {
-      _toast('Login first');
-      return;
-    }
+    final authed = await hasTokenFor('utilities');
+    if (!authed) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
-      final res =
-          await http.get(_utilitiesUri('/billers'), headers: _bearer(t));
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final arr = jsonDecode(res.body) as List<dynamic>;
+      final arr = await serviceGetJsonList(
+        'utilities',
+        '/billers',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 30), staleIfOffline: true),
+      );
       setState(() => _billers = arr);
     } catch (e) {
-      _toast('Billers failed: $e');
+      MessageHost.showErrorBanner(context, 'Billers failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -207,42 +207,56 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
               child: const Text('Pay First Pending')),
         ]),
         const SizedBox(height: 8),
-        for (final b in _billers)
-          ListTile(
-              title: Text(b['name'] ?? ''),
-              subtitle: Text('Category: ${b['category']}'),
-              trailing: TextButton(
-                  onPressed: () => _linkAccount(b['id'] as String, 'METER-123'),
-                  child: const Text('Link METER-123'))),
+        AnimatedSwitcher(
+          duration: AppAnimations.switcherDuration,
+          child: _loading && _billers.isEmpty
+              ? Column(key: const ValueKey('billers_skel'), children: List.generate(4, (i) => const _UtlSkeletonTile()))
+              : Column(key: const ValueKey('billers_list'), children: [
+                  for (final b in _billers)
+                    ListTile(
+                        title: Text(b['name'] ?? ''),
+                        subtitle: Text('Category: ${b['category']}'),
+                        trailing: TextButton(
+                            onPressed: () => _linkAccount(b['id'] as String, 'METER-123'),
+                            child: const Text('Link METER-123'))),
+                ]),
+        ),
         if (_linkedAccountId != null) Text('Linked account: $_linkedAccountId'),
         if (_bills.isNotEmpty) const Divider(),
-        for (final b in _bills)
-          ListTile(
-              title: Text('Bill ${b['id']}'),
-              subtitle:
-                  Text('Status: ${b['status']} Amount: ${b['amount_cents']}')),
+        AnimatedSwitcher(
+          duration: AppAnimations.switcherDuration,
+          child: _loading && _bills.isEmpty
+              ? Column(key: const ValueKey('bills_skel'), children: List.generate(3, (i) => const _UtlSkeletonTile()))
+              : Column(key: const ValueKey('bills_list'), children: [
+                  for (final b in _bills)
+                    ListTile(
+                        title: Text('Bill ${b['id']}'),
+                        subtitle:
+                            Text('Status: ${b['status']} Amount: ${b['amount_cents']}')),
+                ]),
+        ),
       ]),
     );
   }
 
   Future<void> _linkAccount(String billerId, String accountRef) async {
     final t = await _tokens.get('utilities');
-    if (t == null) {
-      _toast('Login first');
-      return;
-    }
+    if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
-      final res = await http.post(
-        _utilitiesUri('/accounts/link'),
-        headers: _bearer(t, headers: {'Content-Type': 'application/json'}),
-        body: jsonEncode({'biller_id': billerId, 'account_ref': accountRef}),
+      final js = await servicePostJson(
+        'utilities',
+        '/accounts/link',
+        body: {'biller_id': billerId, 'account_ref': accountRef},
+        options: const RequestOptions(idempotent: true, queueIfOffline: true, expectValidationErrors: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
       setState(() => _linkedAccountId = js['id'] as String?);
     } catch (e) {
-      _toast('Link failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        MessageHost.showInfoBanner(context, 'Offline – Verknüpfung wird gesendet, sobald Verbindung besteht.');
+      } else {
+        MessageHost.showErrorBanner(context, 'Link failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -250,25 +264,23 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
 
   Future<void> _refreshBills() async {
     final t = await getTokenFor('utilities', store: _tokens);
-    if (t == null) {
-      _toast('Login first');
-      return;
-    }
-    if (_linkedAccountId == null) {
-      _toast('Link account first');
-      return;
-    }
+    if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
+    if (_linkedAccountId == null) { MessageHost.showInfoBanner(context, 'Link account first'); return; }
     setState(() => _loading = true);
     try {
-      final res = await http.post(
-          _utilitiesUri('/bills/refresh',
-              query: {'account_id': _linkedAccountId!}),
-          headers: _bearer(t));
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await servicePostJson(
+        'utilities',
+        '/bills/refresh',
+        query: {'account_id': _linkedAccountId!},
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
+      );
       setState(() => _bills = js['bills'] as List? ?? []);
     } catch (e) {
-      _toast('Refresh failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        MessageHost.showInfoBanner(context, 'Offline – Aktualisierung erfolgt automatisch online.');
+      } else {
+        MessageHost.showErrorBanner(context, 'Refresh failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -276,19 +288,17 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
 
   Future<void> _listBills() async {
     final t = await getTokenFor('utilities', store: _tokens);
-    if (t == null) {
-      _toast('Login first');
-      return;
-    }
+    if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
-      final res =
-          await http.get(_utilitiesUri('/bills'), headers: _bearer(t));
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await serviceGetJson(
+        'utilities',
+        '/bills',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 10), staleIfOffline: true),
+      );
       setState(() => _bills = js['bills'] as List? ?? []);
     } catch (e) {
-      _toast('List bills failed: $e');
+      MessageHost.showErrorBanner(context, 'List bills failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -296,27 +306,27 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
 
   Future<void> _payFirstPending() async {
     final t = await getTokenFor('utilities', store: _tokens);
-    if (t == null) {
-      _toast('Login first');
-      return;
-    }
+    if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     final pending = _bills.where((b) => b['status'] == 'pending').toList();
-    if (pending.isEmpty) {
-      _toast('No pending bills');
-      return;
-    }
+    if (pending.isEmpty) { MessageHost.showInfoBanner(context, 'No pending bills'); return; }
     // Request biometric confirmation if enabled
     final ok = await requireBiometricIfEnabled(context, reason: 'Confirm bill payment');
     if (!ok) return;
     setState(() => _loading = true);
     try {
       final id = pending.first['id'];
-      final res = await http.post(_utilitiesUri('/bills/$id/pay'),
-          headers: _bearer(t));
-      if (res.statusCode >= 400) throw Exception(res.body);
+      await servicePost(
+        'utilities',
+        '/bills/$id/pay',
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
+      );
       _toast('Bill pay initiated');
     } catch (e) {
-      _toast('Pay failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        MessageHost.showInfoBanner(context, 'Offline – Zahlung wird gesendet, sobald Verbindung besteht.');
+      } else {
+        MessageHost.showErrorBanner(context, 'Pay failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -327,15 +337,17 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     try {
       final t = await getTokenFor('utilities', store: _tokens);
       final uri = _utilitiesUri('/help/search', query: {'q': _searchCtrl.text.trim()});
-      final r = await http.get(uri, headers: t != null ? _bearer(t) : {});
-      if (r.statusCode >= 400) throw Exception(r.body);
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
+      final js = await serviceGetJson(
+        'utilities',
+        '/help/search',
+        query: {'q': _searchCtrl.text.trim()},
+      );
       final items = ((js['items'] as List?) ?? [])
           .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
           .toList();
       setState(() => _helpItems = items);
     } catch (e) {
-      _toast('Search failed: $e');
+      MessageHost.showErrorBanner(context, 'Search failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -345,10 +357,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     setState(() => _loading = true);
     try {
       final t = await getTokenFor('utilities', store: _tokens);
-      if (t == null) {
-        _toast('Login first');
-        return;
-      }
+      if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
       final r = await http.post(
         _utilitiesUri('/ocr/invoice'),
         headers: _bearer(t, headers: {'Content-Type': 'application/json'}),
@@ -361,7 +370,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
           .toList();
       setState(() => _ocrFields = fields);
     } catch (e) {
-      _toast('OCR failed: $e');
+      MessageHost.showErrorBanner(context, 'OCR failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -371,10 +380,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     setState(() => _loading = true);
     try {
       final t = await getTokenFor('utilities', store: _tokens);
-      if (t == null) {
-        _toast('Login first');
-        return;
-      }
+      if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
       final body = <String, dynamic>{
         'account_id': _ruleAccountCtrl.text.trim(),
         'enabled': _ruleEnabled,
@@ -383,16 +389,20 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
       if (d != null) body['day_of_month'] = d;
       final m = int.tryParse(_ruleMaxCtrl.text.trim());
       if (m != null) body['max_amount_cents'] = m;
-      final r = await http.post(
-        _utilitiesUri('/autopay/rules'),
-        headers: _bearer(t, headers: {'Content-Type': 'application/json'}),
-        body: jsonEncode(body),
+      await servicePost(
+        'utilities',
+        '/autopay/rules',
+        body: body,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true, expectValidationErrors: true),
       );
-      if (r.statusCode >= 400) throw Exception(r.body);
       _toast('Regel gespeichert');
       await _loadRules();
     } catch (e) {
-      _toast('Save rule failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        MessageHost.showInfoBanner(context, 'Offline – Regel wird gespeichert, sobald Verbindung besteht.');
+      } else {
+        MessageHost.showErrorBanner(context, 'Save rule failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -401,16 +411,15 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
   Future<void> _loadRules() async {
     try {
       final t = await getTokenFor('utilities', store: _tokens);
-      if (t == null) {
-        _toast('Login first');
-        return;
-      }
-      final r = await http.get(_utilitiesUri('/autopay/rules'), headers: _bearer(t));
-      if (r.statusCode >= 400) throw Exception(r.body);
-      final arr = jsonDecode(r.body) as List<dynamic>;
+      if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
+      final arr = await serviceGetJsonList(
+        'utilities',
+        '/autopay/rules',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 10), staleIfOffline: true),
+      );
       setState(() => _rules = arr.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList());
     } catch (e) {
-      _toast('Load rules failed: $e');
+      MessageHost.showErrorBanner(context, 'Load rules failed: $e');
     }
   }
 
@@ -418,18 +427,43 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     setState(() => _loading = true);
     try {
       final t = await getTokenFor('utilities', store: _tokens);
-      if (t == null) {
-        _toast('Login first');
-        return;
-      }
-      final r = await http.post(_utilitiesUri('/autopay/run'), headers: _bearer(t));
-      if (r.statusCode >= 400) throw Exception(r.body);
+      if (t == null) { MessageHost.showInfoBanner(context, 'Login first'); return; }
+      await servicePost(
+        'utilities',
+        '/autopay/run',
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
+      );
       _toast('Auto‑Pay ausgelöst');
     } catch (e) {
-      _toast('Run Auto‑Pay failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        MessageHost.showInfoBanner(context, 'Offline – Auto‑Pay läuft, sobald Verbindung besteht.');
+      } else {
+        MessageHost.showErrorBanner(context, 'Run Auto‑Pay failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
+  }
+}
+
+class _UtlSkeletonTile extends StatelessWidget {
+  const _UtlSkeletonTile();
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(children: [
+          Container(width: 36, height: 36, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(8))),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(height: 12, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(4))),
+            const SizedBox(height: 6),
+            Container(height: 10, width: 100, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(4))),
+          ])),
+        ]),
+      ),
+    );
   }
 }
 // ignore_for_file: use_build_context_synchronously

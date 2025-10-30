@@ -1,10 +1,11 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from ..auth import get_current_user, get_db, ensure_user_and_wallet
+from ..config import settings
 from ..database import SessionLocal
 from ..models import User, Wallet, Invoice, EBillMandate, Transfer, LedgerEntry
 from ..schemas import (
@@ -19,6 +20,7 @@ from ..schemas import (
 from ..utils.kyc_policy import enforce_tx_limits, require_min_kyc_level
 from ..utils.audit import record_event
 from ..utils.risk import evaluate_risk_and_maybe_block
+from ..utils.idempotency_store import reserve as idem_reserve, finalize as idem_finalize
 
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
@@ -65,7 +67,7 @@ def create_invoice(
         issuer_user_id=user.id,
         payer_user_id=payer.id,
         amount_cents=payload.amount_cents,
-        currency_code="SYP",
+        currency_code=settings.DEFAULT_CURRENCY,
         status="pending",
         reference=payload.reference,
         description=payload.description,
@@ -138,11 +140,28 @@ def pay_invoice(
     except HTTPException:
         raise
 
-    # Attempt idempotent transfer
+    # Attempt idempotent transfer with request fingerprint
+    idem_rec = None
     if idem_key:
+        idem_rec, state = idem_reserve(db, str(user.id), "POST", f"/invoices/{invoice_id}/pay", idem_key, {"invoice_id": invoice_id})
+        if state == "replay" and idem_rec.result_ref:
+            existing = db.query(Transfer).filter(Transfer.id == idem_rec.result_ref).one_or_none()
+            if existing is not None:
+                inv.status = "paid"
+                inv.paid_transfer_id = existing.id
+                inv.updated_at = datetime.utcnow()
+                return TransferOut(
+                    transfer_id=str(existing.id),
+                    from_wallet_id=str(existing.from_wallet_id) if existing.from_wallet_id else None,
+                    to_wallet_id=str(existing.to_wallet_id) if existing.to_wallet_id else None,
+                    amount_cents=existing.amount_cents,
+                    currency_code=existing.currency_code,
+                    status=existing.status,
+                )
+    # Fallback to classic idempotency lookup
+    if idem_key and (idem_rec is None):
         existing = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
         if existing is not None:
-            # If we find an existing transfer, assume it's for this invoice
             inv.status = "paid"
             inv.paid_transfer_id = existing.id
             inv.updated_at = datetime.utcnow()
@@ -178,7 +197,7 @@ def pay_invoice(
         inv.paid_transfer_id = t.id
         inv.updated_at = datetime.utcnow()
         record_event(db, "invoices.pay", str(user.id), {"invoice_id": str(inv.id), "amount_cents": inv.amount_cents})
-        return TransferOut(
+        out = TransferOut(
             transfer_id=str(t.id),
             from_wallet_id=str(payer_wallet.id),
             to_wallet_id=str(issuer_wallet.id),
@@ -186,6 +205,12 @@ def pay_invoice(
             currency_code=payer_wallet.currency_code,
             status=t.status,
         )
+        try:
+            if idem_rec is not None:
+                idem_finalize(db, idem_rec, str(t.id))
+        except Exception:
+            pass
+        return out
     except IntegrityError:
         db.rollback()
         if idem_key:
@@ -196,7 +221,7 @@ def pay_invoice(
             inv.status = "paid"
             inv.paid_transfer_id = existing2.id
             inv.updated_at = datetime.utcnow()
-            return TransferOut(
+            out2 = TransferOut(
                 transfer_id=str(existing2.id),
                 from_wallet_id=str(existing2.from_wallet_id) if existing2.from_wallet_id else None,
                 to_wallet_id=str(existing2.to_wallet_id) if existing2.to_wallet_id else None,
@@ -204,6 +229,12 @@ def pay_invoice(
                 currency_code=existing2.currency_code,
                 status=existing2.status,
             )
+            try:
+                if idem_rec is not None:
+                    idem_finalize(db, idem_rec, str(existing2.id))
+            except Exception:
+                pass
+            return out2
         raise
 
 

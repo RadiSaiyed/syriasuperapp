@@ -1,0 +1,20 @@
+services:
+  api:
+    env_file: []
+    volumes:
+      - ./app:/app/app:ro
+      - ./tests:/app/apps/food/tests:ro
+      - ../../libs:/app/libs:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      UVICORN_WORKERS: "1"
+      UVICORN_LOG_LEVEL: "warning"
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/food
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app:/app/libs/superapp_shared
+      PAYMENTS_BASE_URL: http://host.docker.internal:8080
+      PAYMENTS_INTERNAL_SECRET: 7065cd9520fd3079033552eec04a5f6e4a88071bfaff9275b8b536464a3fc09f
+      PAYMENTS_WEBHOOK_SECRET: demo_secret
+    mem_limit: "2g"
+    networks:
+      - default

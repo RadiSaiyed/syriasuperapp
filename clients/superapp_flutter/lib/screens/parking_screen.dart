@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import '../services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:printing/printing.dart';
@@ -10,6 +10,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../main.dart';
 import 'ai_gateway_screen.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 
 class ParkingScreen extends StatefulWidget {
   const ParkingScreen({super.key});
@@ -58,7 +60,7 @@ class _ParkingScreenState extends State<ParkingScreen> {
         _currency = js['currency'] as String? ?? 'SYP';
       });
     } catch (e) {
-      _toast('Zone failed: $e');
+      MessageHost.showErrorBanner(context, 'Zone failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -66,10 +68,7 @@ class _ParkingScreenState extends State<ParkingScreen> {
 
   Future<void> _start() async {
     final z = _zoneId;
-    if (z == null) {
-      _toast('Detect a zone first');
-      return;
-    }
+    if (z == null) { MessageHost.showInfoBanner(context, 'Detect a zone first'); return; }
     setState(() => _loading = true);
     try {
       final res = await http.post(_parkingUri('/sessions/start'),
@@ -88,7 +87,7 @@ class _ParkingScreenState extends State<ParkingScreen> {
       }
       _toast('Started');
     } catch (e) {
-      _toast('Start failed: $e');
+      MessageHost.showErrorBanner(context, 'Start failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -119,7 +118,7 @@ class _ParkingScreenState extends State<ParkingScreen> {
               ));
       setState(() => _sessionId = null);
     } catch (e) {
-      _toast('Stop failed: $e');
+      MessageHost.showErrorBanner(context, 'Stop failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -161,14 +160,10 @@ class _ParkingScreenState extends State<ParkingScreen> {
           body: jsonEncode({"lat": _lat, "lon": _lon, "buffer_m": 50}));
       if (res.statusCode >= 400) throw Exception(res.body);
       final js = jsonDecode(res.body) as Map<String, dynamic>;
-      if (js['auto_stopped'] == true) {
-        setState(() => _sessionId = null);
-        _toast('Auto-stopped (left zone)');
-      } else {
-        _toast('Status: ${js['status']}');
-      }
+      if (js['auto_stopped'] == true) { setState(() => _sessionId = null); _toast('Auto-stopped (left zone)'); }
+      else { _toast('Status: ${js['status']}'); }
     } catch (e) {
-      _toast('Geofence check failed: $e');
+      MessageHost.showErrorBanner(context, 'Geofence check failed: $e');
     }
   }
 
@@ -204,10 +199,7 @@ class _ParkingScreenState extends State<ParkingScreen> {
     super.dispose();
   }
 
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+  void _toast(String msg) { if (!mounted) return; showToast(context, msg); }
 
   @override
   Widget build(BuildContext context) {

@@ -14,6 +14,7 @@ Production notes
 - Set `UVICORN_WORKERS` (default 4) and `APP_PORT` to control published ports; use `UVICORN_EXTRA_ARGS` for TLS or access log tweaks.
 - Disable dev toggles (`DEV_ENABLE_TOPUP`, `DEV_RESET_USER_STATE_ON_LOGIN`, `AUTO_CREATE_SCHEMA`) before promoting to prod; the service now refuses to boot with insecure combinations.
 - If Postgres or Redis run externally (e.g. Hetzner Managed DB), remove the bundled service and point `DB_URL` / `REDIS_URL` to the managed endpoints.
+- Der Service sendet konservative Security‑Header (z. B. `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, restriktives `Permissions-Policy`) und setzt `Cache-Control: no-store` für schreibende Requests.
 
 Auth & OTP
 - DEV: default `OTP_MODE=dev` akzeptiert OTP `123456`.
@@ -27,15 +28,15 @@ Quick test (cURL)
   `TOKEN=$(curl -s http://localhost:8080/auth/verify_otp -H 'Content-Type: application/json' -d '{"phone":"+963900000001","otp":"123456","name":"Ali"}' | jq -r .access_token)`
 - Check wallet:
   `curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/wallet`
-- Dev topup 50,000 SYP:
-  `curl -X POST http://localhost:8080/wallet/topup -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"amount_cents":5000000, "idempotency_key":"topup-1"}'`
+- Dev topup 50,000 SYP (empfohlen per Header `Idempotency-Key`):
+  `curl -X POST http://localhost:8080/wallet/topup -H "Authorization: Bearer $TOKEN" -H 'Idempotency-Key: topup-1' -H 'Content-Type: application/json' -d '{"amount_cents":5000000}'`
 - Become merchant (dev):
   `curl -X POST http://localhost:8080/payments/dev/become_merchant -H "Authorization: Bearer $TOKEN"`
 - Create QR for 10,000 SYP:
   `curl -X POST http://localhost:8080/payments/merchant/qr -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"amount_cents":1000000}'`
-- From another user, pay QR:
+- From another user, pay QR (Header `Idempotency-Key` unterstützt; Body-Fallback bleibt kompatibel):
   - Create second user and top up, then:
-  `curl -X POST http://localhost:8080/payments/merchant/pay -H "Authorization: Bearer $TOKEN_2" -H 'Content-Type: application/json' -d '{"code":"PAY:v1;code=<paste from previous>", "idempotency_key":"qr-pay-1"}'`
+  `curl -X POST http://localhost:8080/payments/merchant/pay -H "Authorization: Bearer $TOKEN_2" -H 'Idempotency-Key: qr-pay-1' -H 'Content-Type: application/json' -d '{"code":"PAY:v1;code=<paste from previous>"}'`
 
 Payment Requests (cURL)
 - Create request (A → B):
@@ -54,6 +55,7 @@ Payment Requests (cURL)
   - Apply migrations: `DB_URL=postgresql+psycopg2://postgres:postgres@db:5432/payments alembic upgrade head`
   - Latest:
     - Add Payment Requests `expires_at`, `metadata_json` and Webhook Delivery backoff fields: `alembic upgrade head`
+    - Add `idempotency_keys` table for request fingerprinting (safe replays and conflict detection): `alembic upgrade head`
 
 Internal (DEV) Integration
 - Set in `.env`: `INTERNAL_API_SECRET=dev_secret` (or your value). Optionally enforce HMAC via `INTERNAL_REQUIRE_HMAC=true`.
@@ -61,6 +63,10 @@ Internal (DEV) Integration
   - `POST /internal/requests` — create payment request by phone: `{from_phone,to_phone,amount_cents}` (optional: `expires_in_minutes`, `metadata`, header `X-Idempotency-Key`).
   - `POST /internal/transfer` — immediate debit/credit between wallets: `{from_phone,to_phone,amount_cents}` (optional header `X-Idempotency-Key`).
   - `GET /internal/wallet?phone=+963...` — fetch `{phone,wallet_id,balance_cents,currency_code}`.
+
+Idempotency (einheitlich)
+- Für `/wallet/topup`, `/wallet/transfer`, `/payments/merchant/pay` wird die Idempotency primär über den Header `Idempotency-Key` erwartet (max. 64 Zeichen). Ein vorhandenes Body-Feld `idempotency_key` wird weiterhin als Fallback unterstützt.
+- Neu: Der Dienst speichert zusätzlich einen Request‑Fingerabdruck (Methode+Pfad+Body‑Hash) pro Nutzer und Key. Wiederholte Requests mit gleicher Key/Fingerabdruck‑Kombination erhalten die ursprüngliche Antwort (Replay). Weicht der Fingerabdruck ab (z. B. anderer Betrag), antwortet der Dienst mit `409 Conflict`.
 
 Refunds (cURL)
 - Create refund (merchant → payer):

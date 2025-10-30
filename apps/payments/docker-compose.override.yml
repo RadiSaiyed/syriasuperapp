@@ -1,0 +1,11 @@
+services:
+  api:
+    # Mount tests into the running container for in-container pytest
+    volumes:
+      - ./tests:/app/tests:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      UVICORN_WORKERS: "1"
+      UVICORN_LOG_LEVEL: "warning"
+    # Give the api container more memory headroom during test runs
+    mem_limit: "2g"

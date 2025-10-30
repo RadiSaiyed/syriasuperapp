@@ -52,8 +52,25 @@ def flow_commerce_checkout(base: str, phone: str, name: str) -> dict:
 
 def flow_doctors_appointment(base: str, phone: str, name: str) -> dict:
     tok = _login_via_otp(base, phone, name)
+    # Search requires a time window; use next 24h
+    from datetime import datetime, timedelta, timezone
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(hours=24)
+    start_iso = start.isoformat().replace("+00:00", "Z")
+    end_iso = end.isoformat().replace("+00:00", "Z")
     with httpx.Client(timeout=10.0) as c:
-        slots = c.post(f"{base}/search_slots", json={}, headers={"Content-Type": "application/json"}).json().get("slots", [])
+        payload = {"start_time": start_iso, "end_time": end_iso, "limit": 50, "offset": 0}
+        slots_resp = c.post(
+            f"{base}/search_slots",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        slots_json = {}
+        try:
+            slots_json = slots_resp.json()
+        except Exception:
+            return {"flow": "doctors", "status": "failed", "error": f"search_slots http {slots_resp.status_code}"}
+        slots = slots_json.get("slots", [])
         if not slots:
             return {"flow": "doctors", "status": "no_slots"}
         slot_id = slots[0]["slot_id"]
@@ -88,4 +105,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

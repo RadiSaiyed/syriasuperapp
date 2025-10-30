@@ -1,11 +1,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import '../services.dart';
 import 'package:http/http.dart' as http;
 import 'dart:io';
 import 'package:flutter/services.dart';
+import 'package:shared_ui/toast.dart';
 
 class RestaurantAdminScreen extends StatefulWidget {
   final String restaurantId;
@@ -110,10 +111,7 @@ class _RestaurantAdminScreenState extends State<RestaurantAdminScreen> {
     return '${v.toStringAsFixed(2)} SYP';
   }
 
-  void _toast(String m) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { if (!mounted) return; showToast(context, m); }
 
   @override
   void initState() {

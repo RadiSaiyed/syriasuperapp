@@ -337,10 +337,468 @@ def list_properties(
                 links.append(f"<{next_url}>; rel=\"next\"")
             if links:
                 response.headers["Link"] = ", ".join(links)
+            # Favorites vary by auth
+            response.headers["Vary"] = "Authorization"
+        except Exception:
+            pass
+    # ETag for conditional requests
+    if response is not None and request is not None:
+        try:
+            from ..utils.http_cache import compute_etag as _ce
+            etag = _ce([x.model_dump() for x in out])
+            inm = request.headers.get("if-none-match")
+            response.headers["ETag"] = etag
+            if inm and inm == etag:
+                return Response(status_code=304)
         except Exception:
             pass
     return out
 
+
+@router.get("/__dup/properties/top", response_model=list[PropertyOut])
+def top_properties(
+    city: str | None = None,
+    rating_band: str | None = None,
+    limit: int = 12,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    response: Response = None,
+    _: None = Depends(rate_limit_dependency(60, "top_props")),
+):
+    from sqlalchemy import func
+    # Cache include offset and band in key
+    if settings.CACHE_ENABLED:
+        ck = ("top_props", city or "_all_", int(limit), int(offset), rating_band or "")
+        c = cache.get(ck)
+        if c is not None:
+            return c
+    query = db.query(Property)
+    if city:
+        query = query.filter(Property.city == city)
+    props = query.order_by(Property.created_at.desc()).limit(1000).all()
+    if not props:
+        return []
+    prop_ids = [p.id for p in props]
+    aggs = (
+        db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+        .filter(Review.property_id.in_(prop_ids))
+        .group_by(Review.property_id)
+        .all()
+    )
+    rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+    pops = (
+        db.query(Reservation.property_id, func.count(Reservation.id))
+        .filter(Reservation.property_id.in_(prop_ids))
+        .group_by(Reservation.property_id)
+        .all()
+    )
+    pop_map = {pid: int(cnt) for (pid, cnt) in pops}
+    imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(prop_ids)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+    first_img: dict = {}
+    for im in imgs:
+        if im.property_id not in first_img:
+            first_img[im.property_id] = im.url
+    fav_map: dict = {}
+    try:
+        if request is not None:
+            from ..auth import try_get_user
+            user = try_get_user(request, db)
+            if user:
+                favs = db.query(FavoriteProperty.property_id).filter(FavoriteProperty.user_id == user.id, FavoriteProperty.property_id.in_(prop_ids)).all()
+                fav_map = {pid: True for (pid,) in favs}
+    except Exception:
+        pass
+
+    rb_min = None
+    if rating_band:
+        b = rating_band.strip()
+        if b == "5": rb_min = 5
+        elif b in ("4+", "4"): rb_min = 4
+        elif b in ("3+", "3"): rb_min = 3
+        elif b in ("2+", "2"): rb_min = 2
+        elif b in ("1+", "1"): rb_min = 1
+
+    rows = []
+    for p in props:
+        ravg, rcnt = rating_map.get(p.id, (0.0, 0))
+        pop = pop_map.get(p.id, 0)
+        score = (ravg or 0.0) * 0.7 + min(pop, 100) / 100.0 * 0.3
+        if rb_min is not None and (ravg or 0.0) < rb_min:
+            continue
+        rows.append((p, score, ravg or None, rcnt))
+    rows.sort(key=lambda t: (t[1], t[2] or 0.0, t[3]), reverse=True)
+    total = len(rows)
+    rows_slice = rows[offset: offset + limit]
+    out: list[PropertyOut] = []
+    for (p, _score, ravg, rcnt) in rows_slice:
+        out.append(PropertyOut(
+            id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
+            address=p.address, latitude=p.latitude, longitude=p.longitude,
+            rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
+            image_url=first_img.get(p.id),
+        ))
+    if settings.CACHE_ENABLED:
+        try:
+            cache.set(ck, out, settings.CACHE_DEFAULT_TTL_SECS)
+        except Exception:
+            pass
+    if response is not None:
+        try:
+            from ..utils.http_cache import compute_etag as _ce
+            etag = _ce([x.model_dump() for x in out])
+            inm = request.headers.get("if-none-match") if request is not None else None
+            response.headers["ETag"] = etag
+            if inm and inm == etag:
+                return Response(status_code=304)
+            response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
+            response.headers["Vary"] = "Authorization"
+            response.headers["X-Total-Count"] = str(total)
+            from starlette.datastructures import URL
+            base = URL(str(request.url))
+            links = []
+            if offset > 0:
+                prev_off = max(0, offset - limit)
+                links.append(f"<{str(base.include_query_params(offset=prev_off, limit=limit))}>; rel=\"prev\"")
+            if offset + limit < int(total):
+                next_off = offset + limit
+                links.append(f"<{str(base.include_query_params(offset=next_off, limit=limit))}>; rel=\"next\"")
+            if links:
+                response.headers["Link"] = ", ".join(links)
+        except Exception:
+            pass
+    return out
+
+
+@router.get("/__dup/properties/nearby", response_model=list[PropertyOut])
+def properties_nearby(
+    lat: float,
+    lon: float,
+    response: Response,
+    rating_band: str | None = None,
+    radius_km: float = 10.0,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    _: None = Depends(rate_limit_dependency(90, "nearby")),
+):
+    from sqlalchemy import func
+    props = db.query(Property).limit(2000).all()
+    if not props:
+        return []
+    def _to_float(v):
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+    def _haversine_km(lat1, lon1, lat2, lon2):
+        from math import radians, sin, cos, asin, sqrt
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+        return 2 * asin(sqrt(a)) * 6371.0
+    prop_ids = [p.id for p in props]
+    aggs = (
+        db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+        .filter(Review.property_id.in_(prop_ids))
+        .group_by(Review.property_id)
+        .all()
+    )
+    rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+    imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(prop_ids)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+    first_img: dict = {}
+    for im in imgs:
+        if im.property_id not in first_img:
+            first_img[im.property_id] = im.url
+    fav_map: dict = {}
+    try:
+        if request is not None:
+            from ..auth import try_get_user
+            user = try_get_user(request, db)
+            if user:
+                from ..models import FavoriteProperty
+                favs = db.query(FavoriteProperty.property_id).filter(FavoriteProperty.user_id == user.id, FavoriteProperty.property_id.in_(prop_ids)).all()
+                fav_map = {pid: True for (pid,) in favs}
+    except Exception:
+        pass
+    rb_min = None
+    if rating_band:
+        b = rating_band.strip()
+        if b == "5": rb_min = 5
+        elif b in ("4+", "4"): rb_min = 4
+        elif b in ("3+", "3"): rb_min = 3
+        elif b in ("2+", "2"): rb_min = 2
+        elif b in ("1+", "1"): rb_min = 1
+    rows = []
+    for p in props:
+        plat = _to_float(p.latitude)
+        plon = _to_float(p.longitude)
+        if plat is None or plon is None:
+            continue
+        dkm = _haversine_km(lat, lon, plat, plon)
+        if dkm <= radius_km:
+            ravg, rcnt = rating_map.get(p.id, (None, 0))
+            if rb_min is not None and ((ravg or 0.0) < rb_min):
+                continue
+            rows.append((dkm, p, ravg, rcnt))
+    rows.sort(key=lambda t: (t[0], t[2] if t[2] is not None else -1.0, t[3]))
+    total = len(rows)
+    rows_slice = rows[offset: offset + limit]
+    out: list[PropertyOut] = []
+    for (dkm, p, ravg, rcnt) in rows_slice:
+        out.append(PropertyOut(
+            id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
+            address=p.address, latitude=p.latitude, longitude=p.longitude,
+            rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
+            image_url=first_img.get(p.id),
+            distance_km=dkm,
+        ))
+    try:
+        from ..utils.http_cache import compute_etag as _ce
+        etag = _ce([x.model_dump() for x in out])
+        inm = request.headers.get("if-none-match") if request is not None else None
+        response.headers["ETag"] = etag
+        if inm and inm == etag:
+            return Response(status_code=304)
+        response.headers["Cache-Control"] = "public, max-age=60"
+        response.headers["Vary"] = "Authorization"
+        response.headers["X-Total-Count"] = str(total)
+        from starlette.datastructures import URL
+        base = URL(str(request.url))
+        links = []
+        if offset > 0:
+            prev_off = max(0, offset - limit)
+            links.append(f"<{str(base.include_query_params(offset=prev_off, limit=limit))}>; rel=\"prev\"")
+        if offset + limit < int(total):
+            next_off = offset + limit
+            links.append(f"<{str(base.include_query_params(offset=next_off, limit=limit))}>; rel=\"next\"")
+        if links:
+            response.headers["Link"] = ", ".join(links)
+    except Exception:
+        pass
+    return out
+
+@router.get("/properties/top", response_model=list[PropertyOut])
+def top_properties(
+    city: str | None = None,
+    rating_band: str | None = None,
+    limit: int = 12,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    response: Response = None,
+    _: None = Depends(rate_limit_dependency(60, "top_props")),
+):
+    from sqlalchemy import func
+    if settings.CACHE_ENABLED:
+        ck = ("top_props", city or "_all_", int(limit), int(offset), rating_band or "")
+        c = cache.get(ck)
+        if c is not None:
+            return c
+    query = db.query(Property)
+    if city:
+        query = query.filter(Property.city == city)
+    props = query.order_by(Property.created_at.desc()).limit(1000).all()
+    if not props:
+        return []
+    prop_ids = [p.id for p in props]
+    aggs = (
+        db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+        .filter(Review.property_id.in_(prop_ids))
+        .group_by(Review.property_id)
+        .all()
+    )
+    rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+    pops = (
+        db.query(Reservation.property_id, func.count(Reservation.id))
+        .filter(Reservation.property_id.in_(prop_ids))
+        .group_by(Reservation.property_id)
+        .all()
+    )
+    pop_map = {pid: int(cnt) for (pid, cnt) in pops}
+    imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(prop_ids)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+    first_img: dict = {}
+    for im in imgs:
+        if im.property_id not in first_img:
+            first_img[im.property_id] = im.url
+    fav_map: dict = {}
+    try:
+        if request is not None:
+            from ..auth import try_get_user
+            user = try_get_user(request, db)
+            if user:
+                favs = db.query(FavoriteProperty.property_id).filter(FavoriteProperty.user_id == user.id, FavoriteProperty.property_id.in_(prop_ids)).all()
+                fav_map = {pid: True for (pid,) in favs}
+    except Exception:
+        pass
+    rb_min = None
+    if rating_band:
+        b = rating_band.strip()
+        if b == "5": rb_min = 5
+        elif b in ("4+", "4"): rb_min = 4
+        elif b in ("3+", "3"): rb_min = 3
+        elif b in ("2+", "2"): rb_min = 2
+        elif b in ("1+", "1"): rb_min = 1
+    rows = []
+    for p in props:
+        ravg, rcnt = rating_map.get(p.id, (0.0, 0))
+        pop = pop_map.get(p.id, 0)
+        score = (ravg or 0.0) * 0.7 + min(pop, 100) / 100.0 * 0.3
+        if rb_min is not None and (ravg or 0.0) < rb_min:
+            continue
+        rows.append((p, score, ravg or None, rcnt))
+    rows.sort(key=lambda t: (t[1], t[2] or 0.0, t[3]), reverse=True)
+    total = len(rows)
+    rows_slice = rows[offset: offset + limit]
+    out: list[PropertyOut] = []
+    for (p, _score, ravg, rcnt) in rows_slice:
+        out.append(PropertyOut(
+            id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
+            address=p.address, latitude=p.latitude, longitude=p.longitude,
+            rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
+            image_url=first_img.get(p.id),
+        ))
+    if settings.CACHE_ENABLED:
+        try:
+            cache.set(ck, out, settings.CACHE_DEFAULT_TTL_SECS)
+        except Exception:
+            pass
+    if response is not None:
+        try:
+            from ..utils.http_cache import compute_etag as _ce
+            etag = _ce([x.model_dump() for x in out])
+            inm = request.headers.get("if-none-match") if request is not None else None
+            response.headers["ETag"] = etag
+            if inm and inm == etag:
+                return Response(status_code=304)
+            response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
+            response.headers["Vary"] = "Authorization"
+            response.headers["X-Total-Count"] = str(total)
+            from starlette.datastructures import URL
+            base = URL(str(request.url))
+            links = []
+            if offset > 0:
+                prev_off = max(0, offset - limit)
+                links.append(f"<{str(base.include_query_params(offset=prev_off, limit=limit))}>; rel=\"prev\"")
+            if offset + limit < int(total):
+                next_off = offset + limit
+                links.append(f"<{str(base.include_query_params(offset=next_off, limit=limit))}>; rel=\"next\"")
+            if links:
+                response.headers["Link"] = ", ".join(links)
+        except Exception:
+            pass
+    return out
+
+
+@router.get("/properties/nearby", response_model=list[PropertyOut])
+def properties_nearby(
+    lat: float,
+    lon: float,
+    response: Response,
+    rating_band: str | None = None,
+    radius_km: float = 10.0,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    _: None = Depends(rate_limit_dependency(90, "nearby")),
+):
+    from sqlalchemy import func
+    props = db.query(Property).limit(2000).all()
+    if not props:
+        return []
+    def _to_float(v):
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+    def _haversine_km(lat1, lon1, lat2, lon2):
+        from math import radians, sin, cos, asin, sqrt
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+        return 2 * asin(sqrt(a)) * 6371.0
+    prop_ids = [p.id for p in props]
+    aggs = (
+        db.query(Review.property_id, func.avg(Review.rating), func.count(Review.id))
+        .filter(Review.property_id.in_(prop_ids))
+        .group_by(Review.property_id)
+        .all()
+    )
+    rating_map = {pid: (float(avg) if avg is not None else None, int(cnt) if cnt is not None else 0) for (pid, avg, cnt) in aggs}
+    imgs = db.query(PropertyImage).filter(PropertyImage.property_id.in_(prop_ids)).order_by(PropertyImage.sort_order.asc(), PropertyImage.created_at.asc()).all()
+    first_img: dict = {}
+    for im in imgs:
+        if im.property_id not in first_img:
+            first_img[im.property_id] = im.url
+    fav_map: dict = {}
+    try:
+        if request is not None:
+            from ..auth import try_get_user
+            user = try_get_user(request, db)
+            if user:
+                from ..models import FavoriteProperty
+                favs = db.query(FavoriteProperty.property_id).filter(FavoriteProperty.user_id == user.id, FavoriteProperty.property_id.in_(prop_ids)).all()
+                fav_map = {pid: True for (pid,) in favs}
+    except Exception:
+        pass
+    rb_min = None
+    if rating_band:
+        b = rating_band.strip()
+        if b == "5": rb_min = 5
+        elif b in ("4+", "4"): rb_min = 4
+        elif b in ("3+", "3"): rb_min = 3
+        elif b in ("2+", "2"): rb_min = 2
+        elif b in ("1+", "1"): rb_min = 1
+    rows = []
+    for p in props:
+        plat = _to_float(p.latitude)
+        plon = _to_float(p.longitude)
+        if plat is None or plon is None:
+            continue
+        dkm = _haversine_km(lat, lon, plat, plon)
+        if dkm <= radius_km:
+            ravg, rcnt = rating_map.get(p.id, (None, 0))
+            if rb_min is not None and ((ravg or 0.0) < rb_min):
+                continue
+            rows.append((dkm, p, ravg, rcnt))
+    rows.sort(key=lambda t: (t[0], t[2] if t[2] is not None else -1.0, t[3]))
+    total = len(rows)
+    rows_slice = rows[offset: offset + limit]
+    out: list[PropertyOut] = []
+    for (dkm, p, ravg, rcnt) in rows_slice:
+        out.append(PropertyOut(
+            id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
+            address=p.address, latitude=p.latitude, longitude=p.longitude,
+            rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
+            image_url=first_img.get(p.id),
+            distance_km=dkm,
+        ))
+    try:
+        from ..utils.http_cache import compute_etag as _ce
+        etag = _ce([x.model_dump() for x in out])
+        inm = request.headers.get("if-none-match") if request is not None else None
+        response.headers["ETag"] = etag
+        if inm and inm == etag:
+            return Response(status_code=304)
+        response.headers["Cache-Control"] = "public, max-age=60"
+        response.headers["Vary"] = "Authorization"
+        response.headers["X-Total-Count"] = str(total)
+        from starlette.datastructures import URL
+        base = URL(str(request.url))
+        links = []
+        if offset > 0:
+            prev_off = max(0, offset - limit)
+            links.append(f"<{str(base.include_query_params(offset=prev_off, limit=limit))}>; rel=\"prev\"")
+        if offset + limit < int(total):
+            next_off = offset + limit
+            links.append(f"<{str(base.include_query_params(offset=next_off, limit=limit))}>; rel=\"next\"")
+        if links:
+            response.headers["Link"] = ", ".join(links)
+    except Exception:
+        pass
+    return out
 
 @router.get("/properties/{property_id}", response_model=PropertyDetailOut)
 def get_property(property_id: str, db: Session = Depends(get_db)):
@@ -781,6 +1239,7 @@ def top_properties(
     city: str | None = None,
     rating_band: str | None = None,
     limit: int = 12,
+    offset: int = 0,
     db: Session = Depends(get_db),
     request: Request = None,
     response: Response = None,
@@ -788,7 +1247,7 @@ def top_properties(
 ):
     from sqlalchemy import func
     if settings.CACHE_ENABLED:
-        ck = ("top_props", city or "_all_", int(limit))
+        ck = ("top_props", city or "_all_", int(limit), int(offset), rating_band or "")
         c = cache.get(ck)
         if c is not None:
             return c
@@ -857,8 +1316,10 @@ def top_properties(
             continue
         rows.append((p, score, ravg or None, rcnt))
     rows.sort(key=lambda t: (t[1], t[2] or 0.0, t[3]), reverse=True)
+    total = len(rows)
+    rows_slice = rows[offset: offset + limit]
     out: list[PropertyOut] = []
-    for (p, _score, ravg, rcnt) in rows[:limit]:
+    for (p, _score, ravg, rcnt) in rows_slice:
         out.append(PropertyOut(
             id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
             address=p.address, latitude=p.latitude, longitude=p.longitude,
@@ -880,6 +1341,19 @@ def top_properties(
                 return Response(status_code=304)
             response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
             response.headers["Vary"] = "Authorization"
+            # Pagination headers
+            response.headers["X-Total-Count"] = str(total)
+            from starlette.datastructures import URL
+            base = URL(str(request.url))
+            links = []
+            if offset > 0:
+                prev_off = max(0, offset - limit)
+                links.append(f"<{str(base.include_query_params(offset=prev_off, limit=limit))}>; rel=\"prev\"")
+            if offset + limit < int(total):
+                next_off = offset + limit
+                links.append(f"<{str(base.include_query_params(offset=next_off, limit=limit))}>; rel=\"next\"")
+            if links:
+                response.headers["Link"] = ", ".join(links)
         except Exception:
             pass
     return out
@@ -1067,23 +1541,29 @@ def popular_cities(
     request: Request,
     response: Response,
     limit: int = 8,
+    offset: int = 0,
     db: Session = Depends(get_db),
     _: None = Depends(rate_limit_dependency(60, "cities_popular")),
 ):
     from sqlalchemy import func
     if settings.CACHE_ENABLED:
-        ck = ("cities_popular", int(limit))
+        ck = ("cities_popular", int(limit), int(offset))
         c = cache.get(ck)
         if c is not None:
             return c
-    rows = (
+    base_q = (
         db.query(Property.city, func.count(Property.id))
         .filter(Property.city.isnot(None))
         .group_by(Property.city)
         .order_by(func.count(Property.id).desc())
-        .limit(limit)
-        .all()
     )
+    rows = base_q.offset(offset).limit(limit).all()
+    # Total distinct cities count
+    try:
+        from sqlalchemy import distinct
+        total = db.query(func.count(distinct(Property.city))).filter(Property.city.isnot(None)).scalar() or 0
+    except Exception:
+        total = None
     out: list[CityPopularOut] = []
     for (city, cnt) in rows:
         if not city:
@@ -1162,6 +1642,19 @@ def popular_cities(
         if inm and inm == etag:
             return Response(status_code=304)
         response.headers["Cache-Control"] = f"public, max-age={max(10, settings.CACHE_DEFAULT_TTL_SECS)}"
+        if total is not None:
+            response.headers["X-Total-Count"] = str(int(total))
+            from starlette.datastructures import URL
+            base = URL(str(request.url))
+            links = []
+            if offset > 0:
+                prev_off = max(0, offset - limit)
+                links.append(f"<{str(base.include_query_params(offset=prev_off, limit=limit))}>; rel=\"prev\"")
+            if offset + limit < int(total):
+                next_off = offset + limit
+                links.append(f"<{str(base.include_query_params(offset=next_off, limit=limit))}>; rel=\"next\"")
+            if links:
+                response.headers["Link"] = ", ".join(links)
     except Exception:
         pass
     return out
@@ -1175,6 +1668,7 @@ def properties_nearby(
     rating_band: str | None = None,
     radius_km: float = 10.0,
     limit: int = 100,
+    offset: int = 0,
     db: Session = Depends(get_db),
     request: Request = None,
     _: None = Depends(rate_limit_dependency(90, "nearby")),
@@ -1250,13 +1744,16 @@ def properties_nearby(
                 continue
             rows.append((dkm, p, ravg, rcnt))
     rows.sort(key=lambda t: (t[0], t[2] if t[2] is not None else -1.0, t[3]))
+    total = len(rows)
+    rows_slice = rows[offset: offset + limit]
     out: list[PropertyOut] = []
-    for (dkm, p, ravg, rcnt) in rows[:limit]:
+    for (dkm, p, ravg, rcnt) in rows_slice:
         out.append(PropertyOut(
             id=str(p.id), name=p.name, type=p.type, city=p.city, description=p.description,
             address=p.address, latitude=p.latitude, longitude=p.longitude,
             rating_avg=ravg, rating_count=rcnt, is_favorite=bool(fav_map.get(p.id)) if fav_map else None,
             image_url=first_img.get(p.id),
+            distance_km=dkm,
         ))
     try:
         from ..utils.http_cache import compute_etag as _ce
@@ -1267,6 +1764,19 @@ def properties_nearby(
             return Response(status_code=304)
         response.headers["Cache-Control"] = "public, max-age=60"
         response.headers["Vary"] = "Authorization"
+        # Pagination headers
+        response.headers["X-Total-Count"] = str(total)
+        from starlette.datastructures import URL
+        base = URL(str(request.url))
+        links = []
+        if offset > 0:
+            prev_off = max(0, offset - limit)
+            links.append(f"<{str(base.include_query_params(offset=prev_off, limit=limit))}>; rel=\"prev\"")
+        if offset + limit < int(total):
+            next_off = offset + limit
+            links.append(f"<{str(base.include_query_params(offset=next_off, limit=limit))}>; rel=\"next\"")
+        if links:
+            response.headers["Link"] = ", ".join(links)
     except Exception:
         pass
     return out

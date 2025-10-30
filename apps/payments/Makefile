@@ -1,9 +1,12 @@
 SHELL := /bin/sh
 
 compose := docker compose
+# Dev compose uses local ports and no external networks; override is picked up automatically
+compose_dev := docker compose -f docker-compose.dev.yml -f docker-compose.override.yml
 DB_URL_COMPOSE := postgresql+psycopg2://postgres:postgres@db:5432/payments
 
-.PHONY: up-db build migrate up-api logs health down clean cash-demo e2e sbom audit licenses
+.PHONY: up-db build migrate up-api logs health down clean cash-demo e2e sbom audit licenses \
+	test-container test-one test-host
 
 up-db:
 	$(compose) up -d db
@@ -31,6 +34,29 @@ down:
 
 clean:
 	$(compose) down -v
+
+# --- Testing helpers ---
+# Run full test suite in a transient container (isolated, uses dev compose). Ensures Redis is flushed.
+test-container:
+	@echo "[tests] Starting dev deps (db, redis) and running pytest in container...";
+	$(compose_dev) up -d db redis >/dev/null ; \
+	docker exec payments-redis-1 redis-cli FLUSHALL >/dev/null 2>&1 || true ; \
+	$(compose_dev) run --rm --entrypoint "" api bash -lc 'pytest -q /app/tests'
+
+# Run a single test file inside the container: make test-one F=test_otp_redis.py
+test-one:
+	@[ -n "$(F)" ] || (echo "Usage: make test-one F=test_file.py" && exit 1)
+	@echo "[tests] Running single test $(F) in container...";
+	$(compose_dev) up -d db redis >/dev/null ; \
+	docker exec payments-redis-1 redis-cli FLUSHALL >/dev/null 2>&1 || true ; \
+	$(compose_dev) run --rm --entrypoint "" api bash -lc 'pytest -q /app/tests/$(F)'
+
+# Run tests on host (expects dev db/redis running; sets PYTHONPATH to shared lib)
+test-host:
+	@set -e; \
+	export REDIS_URL=redis://localhost:6379/0; \
+	export PYTHONPATH="$(PWD)/../../libs/superapp_shared"; \
+	pytest -q
 
 cash-demo:
 	@set -e; \

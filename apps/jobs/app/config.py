@@ -27,6 +27,7 @@ class Settings:
     OTP_MODE: str = os.getenv("OTP_MODE", "dev")
     OTP_TTL_SECS: int = int(os.getenv("OTP_TTL_SECS", "300"))
     OTP_MAX_ATTEMPTS: int = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+    DEV_DISABLE_OTP: bool = env_bool("DEV_DISABLE_OTP", default=False)
     # Taxi scheduled dispatch cron
     TAXI_BASE_URL: str = os.getenv("TAXI_BASE_URL", "http://taxi-api:8081")
     TAXI_DISPATCH_INTERVAL_SECS: int = int(os.getenv("TAXI_DISPATCH_INTERVAL_SECS", "60"))
@@ -36,6 +37,10 @@ class Settings:
     # Webhooks
     WEBHOOK_ENABLED: str = os.getenv("WEBHOOK_ENABLED", "false")
     WEBHOOK_TIMEOUT_SECS: int = int(os.getenv("WEBHOOK_TIMEOUT_SECS", "3"))
+    # Payments (optional)
+    PAYMENTS_BASE_URL: str = os.getenv("PAYMENTS_BASE_URL", "")
+    PAYMENTS_INTERNAL_SECRET: str = os.getenv("PAYMENTS_INTERNAL_SECRET", "")
+    PAYMENTS_WEBHOOK_SECRET: str = os.getenv("PAYMENTS_WEBHOOK_SECRET", "")
 
     @property
     def jwt_expires_delta(self) -> timedelta:

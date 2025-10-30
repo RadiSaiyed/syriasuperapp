@@ -1,6 +1,6 @@
 import secrets
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, get_db
@@ -13,7 +13,10 @@ from ..utils.audit import record_event
 from ..utils.fraud import check_qr_velocity
 from ..utils.risk import evaluate_risk_and_maybe_block
 from prometheus_client import Counter
+from fastapi import Header
+from ..utils.idempotency import resolve_idempotency_key
 from sqlalchemy.exc import IntegrityError
+from ..utils.idempotency_store import reserve as idem_reserve, finalize as idem_finalize
 
 PAY_COUNTER = Counter("payments_qr_total", "QR payments", ["status"]) 
 # Merchant revenue KPIs (cents)
@@ -202,13 +205,30 @@ def pay_qr(
     payload: QRPayIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    idem_hdr: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     # Require minimal KYC level for merchant payments
     require_min_kyc_level(user, settings.KYC_MIN_LEVEL_FOR_MERCHANT_PAY)
     # Velocity guard
     check_qr_velocity(db, user, 1)
-    # Idempotency on transfers.idempotency_key
-    existing = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+    # Idempotency on transfers.idempotency_key (header preferred, fallback to body)
+    idem_key = resolve_idempotency_key(idem_hdr, getattr(payload, "idempotency_key", None))
+    idem_rec = None
+    # Reserve idempotency with synthesized request fingerprint; replay returns prior result
+    if idem_key:
+        idem_rec, state = idem_reserve(db, str(user.id), "POST", "/payments/merchant/pay", idem_key, payload)
+        if state == "replay" and idem_rec.result_ref:
+            existing = db.query(Transfer).filter(Transfer.id == idem_rec.result_ref).one_or_none()
+            if existing:
+                return TransferOut(
+                    transfer_id=str(existing.id),
+                    from_wallet_id=str(existing.from_wallet_id) if existing.from_wallet_id else None,
+                    to_wallet_id=str(existing.to_wallet_id),
+                    amount_cents=existing.amount_cents,
+                    currency_code=existing.currency_code,
+                    status=existing.status,
+                )
+    existing = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
     if existing:
         return TransferOut(
             transfer_id=str(existing.id),
@@ -226,7 +246,7 @@ def pay_qr(
 
     qr = db.query(QRCode).filter(QRCode.code == opaque).with_for_update().one_or_none()
     # Re-check idempotency after acquiring the row lock to handle concurrent calls
-    existing2 = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+    existing2 = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
     if existing2:
         return TransferOut(
             transfer_id=str(existing2.id),
@@ -272,7 +292,7 @@ def pay_qr(
             amount_cents=amount,
             currency_code=qr.currency_code,
             status="completed",
-            idempotency_key=payload.idempotency_key,
+            idempotency_key=idem_key,
         )
         db.add(transfer)
         db.flush()
@@ -293,6 +313,13 @@ def pay_qr(
         fee_amount = calc_fee_bps(amount, fee_bps)
         if fee_amount > 0:
             fee_wallet = ensure_fee_wallet(db)
+            # Lock the fee wallet row to avoid lost updates under concurrency
+            fee_wallet = (
+                db.query(Wallet)
+                .filter(Wallet.id == fee_wallet.id)
+                .with_for_update()
+                .one()
+            )
             # Ensure merchant has funds for fee (it just received funds above)
             if merchant_wallet.balance_cents < fee_amount:
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Fee settlement failed")
@@ -328,6 +355,11 @@ def pay_qr(
             currency_code=transfer.currency_code,
             status=transfer.status,
         )
+        try:
+            if idem_rec is not None:
+                idem_finalize(db, idem_rec, str(transfer.id))
+        except Exception:
+            pass
         record_event(db, "payments.qr_pay", str(user.id), {"amount_cents": transfer.amount_cents})
         try:
             PAY_COUNTER.labels("completed").inc()
@@ -339,7 +371,7 @@ def pay_qr(
         # Another concurrent request created the same idempotent transfer first.
         # Roll back our partial transaction and return the existing transfer.
         db.rollback()
-        existing = db.query(Transfer).filter(Transfer.idempotency_key == payload.idempotency_key).one_or_none()
+        existing = db.query(Transfer).filter(Transfer.idempotency_key == idem_key).one_or_none()
         if existing is None:
             # If still not found, propagate error
             raise
@@ -418,7 +450,7 @@ def create_cpm_request(payload: dict, user: User = Depends(get_current_user), db
         requester_user_id=user.id,
         target_user_id=target.id,
         amount_cents=amount_cents,
-        currency_code="SYP",
+        currency_code=settings.DEFAULT_CURRENCY,
         status="pending",
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),

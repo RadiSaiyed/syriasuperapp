@@ -1,7 +1,11 @@
 import os
 from datetime import timedelta
 
-from superapp_shared import env_bool, env_list
+try:
+    # Prefer direct import to avoid stale package exports
+    from superapp_shared.env import env_bool, env_list  # type: ignore
+except Exception:  # fallback to package exports
+    from superapp_shared import env_bool, env_list  # type: ignore
 
 
 class Settings:
@@ -32,6 +36,8 @@ class Settings:
     OTP_MODE: str = os.getenv("OTP_MODE", "dev")
     OTP_TTL_SECS: int = int(os.getenv("OTP_TTL_SECS", "300"))
     OTP_MAX_ATTEMPTS: int = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+    # Dev: optionally hide/disable OTP endpoints
+    DEV_DISABLE_OTP: bool = env_bool("DEV_DISABLE_OTP", default=False)
 
     @property
     def jwt_expires_delta(self) -> timedelta:

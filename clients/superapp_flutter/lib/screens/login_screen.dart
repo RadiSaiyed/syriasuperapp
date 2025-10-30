@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -11,44 +13,25 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _phone = TextEditingController(text: '+963900000001');
-  final _otp = TextEditingController(text: '123456');
-  final _name = TextEditingController();
+  final _username = TextEditingController(text: 'admin');
+  final _password = TextEditingController(text: 'admin');
+  final _regUsername = TextEditingController();
+  final _regPassword = TextEditingController();
+  final _regPhone = TextEditingController();
+  final _regName = TextEditingController();
   bool _loading = false;
 
-  void _toast(String m) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { if (!mounted) return; showToast(context, m); }
 
-  Future<void> _requestOtp() async {
-    final p = _phone.text.trim();
-    if (p.isEmpty) return;
+  Future<void> _devLogin() async {
+    final u = _username.text.trim();
+    final p = _password.text.trim();
+    if (u.isEmpty || p.isEmpty) { _toast('Enter username and password'); return; }
     setState(() => _loading = true);
     try {
-      await requestOtp('payments', p);
-      _toast('OTP sent (dev: 123456)');
-    } catch (e) {
-      _toast('OTP failed: $e');
-    } finally { if (mounted) setState(() => _loading = false); }
-  }
-
-  Future<void> _verify() async {
-    final p = _phone.text.trim();
-    final o = _otp.text.trim();
-    if (p.isEmpty || o.isEmpty) { _toast('Enter phone and OTP'); return; }
-    setState(() => _loading = true);
-    try {
-      await verifyOtp('payments', p, o, name: _name.text.trim().isEmpty ? null : _name.text.trim());
-      // Also sign into Chat (dev OTP works without prior request)
-      try {
-        await verifyOtp('chat', p, o, name: _name.text.trim().isEmpty ? null : _name.text.trim());
-      } catch (_) { /* ignore; chat may be offline */ }
-      // Propagate token to all services (single-login)
-      final t = await MultiTokenStore().get('payments');
-      if (t != null && t.isNotEmpty) {
-        await MultiTokenStore().setAll(t);
-      }
+      await devLogin(username: u, password: p);
+      // Token is already propagated in devLogin; optionally probe Payments
+      await validateTokenAndMaybePropagate(service: 'payments', propagateAll: true);
       // Offer enabling biometric unlock if supported
       try {
         final auth = LocalAuthentication();
@@ -74,7 +57,42 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.of(context).pushReplacementNamed('/home');
     } catch (e) {
-      _toast('Login failed: $e');
+      MessageHost.showErrorBanner(context, 'Dev login failed: $e');
+    } finally { if (mounted) setState(() => _loading = false); }
+  }
+
+  Future<void> _register() async {
+    final u = _regUsername.text.trim();
+    final p = _regPassword.text.trim();
+    final ph = _regPhone.text.trim();
+    final nm = _regName.text.trim();
+    if (u.isEmpty || p.isEmpty || ph.isEmpty) {
+      _toast('Enter username, password, and phone');
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      await registerUser(username: u, password: p, phone: ph, name: nm.isEmpty ? null : nm);
+      await validateTokenAndMaybePropagate(service: 'payments', propagateAll: true);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacementNamed('/home');
+    } catch (e) {
+      MessageHost.showErrorBanner(context, 'Registration failed: $e');
+    } finally { if (mounted) setState(() => _loading = false); }
+  }
+
+  Future<void> _passwordLogin() async {
+    final u = _username.text.trim();
+    final p = _password.text.trim();
+    if (u.isEmpty || p.isEmpty) { _toast('Enter username and password'); return; }
+    setState(() => _loading = true);
+    try {
+      await passwordLogin(username: u, password: p);
+      await validateTokenAndMaybePropagate(service: 'payments', propagateAll: true);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacementNamed('/home');
+    } catch (e) {
+      MessageHost.showErrorBanner(context, 'Login failed: $e');
     } finally { if (mounted) setState(() => _loading = false); }
   }
 
@@ -90,19 +108,45 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                const Text('Sign in with phone', style: TextStyle(fontWeight: FontWeight.w600)),
+                const Text('Create account', style: TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
-                TextField(controller: _phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone (+963...)')),
+                TextField(controller: _regUsername, decoration: const InputDecoration(labelText: 'Username')),
                 const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(child: TextField(controller: _otp, decoration: const InputDecoration(labelText: 'OTP'))),
-                  const SizedBox(width: 8),
-                  OutlinedButton(onPressed: _loading ? null : _requestOtp, child: const Text('Request OTP')),
-                ]),
+                TextField(controller: _regPassword, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
                 const SizedBox(height: 8),
-                TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name (optional)')),
+                TextField(controller: _regPhone, decoration: const InputDecoration(labelText: 'Phone (+963...)'), keyboardType: TextInputType.phone),
                 const SizedBox(height: 8),
-                FilledButton(onPressed: _loading ? null : _verify, child: const Text('Continue')),
+                TextField(controller: _regName, decoration: const InputDecoration(labelText: 'Name (optional)')),
+                const SizedBox(height: 8),
+                FilledButton(onPressed: _loading ? null : _register, child: const Text('Sign up')),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Glass(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                const Text('Login with username/password', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                TextField(controller: _username, decoration: const InputDecoration(labelText: 'Username')),
+                const SizedBox(height: 8),
+                TextField(controller: _password, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
+                const SizedBox(height: 8),
+                FilledButton(onPressed: _loading ? null : _passwordLogin, child: const Text('Continue')),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Glass(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                const Text('Dev login (shortcuts)', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                const Text('For local dev only. Maps to test users.'),
+                const SizedBox(height: 8),
+                FilledButton(onPressed: _loading ? null : _devLogin, child: const Text('Dev Login')),
               ]),
             ),
           ),

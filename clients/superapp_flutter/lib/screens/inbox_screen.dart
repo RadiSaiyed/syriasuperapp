@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../services.dart';
 import 'package:http/http.dart' as http;
+import '../push_history.dart';
 
 class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key});
@@ -17,6 +18,8 @@ class _InboxScreenState extends State<InboxScreen> {
   WebSocketChannel? _ws;
   final List<Map<String, dynamic>> _events = [];
   bool _connecting = false;
+  List<PushHistoryEntry> _pushes = const [];
+  String _userId = '';
 
   Uri _chatUri(String path, {Map<String, String>? query}) =>
       ServiceConfig.endpoint('chat', path, query: query);
@@ -30,6 +33,7 @@ class _InboxScreenState extends State<InboxScreen> {
   void initState() {
     super.initState();
     _connectWs();
+    _loadPush();
   }
 
   @override
@@ -52,6 +56,14 @@ class _InboxScreenState extends State<InboxScreen> {
           .replaceFirst('https://', 'wss://')
           .replaceFirst('http://', 'ws://');
       final uri = Uri.parse('$wsBase/ws?token=$t');
+      // Decode user id from token for filtering
+      try {
+        final parts = t.split('.');
+        final map = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(parts[1])))) as Map<String, dynamic>;
+        _userId = (map['sub'] ?? '').toString();
+      } catch (_) {
+        _userId = '';
+      }
       final ch = WebSocketChannel.connect(uri);
       _ws = ch;
       _append({'kind': 'text', 'text': 'Verbunden mit Inbox'});
@@ -77,6 +89,12 @@ class _InboxScreenState extends State<InboxScreen> {
 
   void _append(Map<String, dynamic> e) {
     setState(() => _events.insert(0, e));
+  }
+
+  Future<void> _loadPush() async {
+    final items = await PushHistoryStore.load();
+    if (!mounted) return;
+    setState(() => _pushes = items);
   }
 
   Future<void> _fetchInbox() async {
@@ -112,6 +130,14 @@ class _InboxScreenState extends State<InboxScreen> {
           }
         }
         _append({'kind': 'text', 'text': text});
+        try {
+          // Increase unread only for messages addressed to me
+          final rcpt = (msg['recipient_user_id'] ?? '').toString();
+          if (_userId.isNotEmpty && rcpt == _userId) {
+            final cur = ChatUnreadStore.count.value;
+            ChatUnreadStore.set(cur + 1);
+          }
+        } catch (_) {}
         return;
       }
     } catch (_) {}
@@ -165,38 +191,59 @@ class _InboxScreenState extends State<InboxScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Inbox'), flexibleSpace: const Glass(padding: EdgeInsets.zero, blur: 24, opacity: 0.16, borderRadius: BorderRadius.zero)),
-      body: Column(children: [
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Glass(
-            child: Row(children: [
-              FilledButton.icon(onPressed: _connecting ? null : _connectWs, icon: const Icon(Icons.wifi), label: const Text('Verbinden')),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(onPressed: _fetchInbox, icon: const Icon(Icons.download), label: const Text('Fetch Inbox')),
-            ]),
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            reverse: true,
-            itemCount: _events.length,
-            itemBuilder: (_, i) {
-              final e = _events[i];
-              if (e['kind'] == 'action') {
-                return GlassCard(
-                    child: ListTile(
-                  title: Text(e['title']?.toString() ?? 'Aktion'),
-                  subtitle: Text(const JsonEncoder.withIndent('  ').convert(e['data'] ?? {})),
-                  trailing: FilledButton(onPressed: () => _confirmAction(e), child: const Text('Bestätigen')),
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Inbox'), flexibleSpace: const Glass(padding: EdgeInsets.zero, blur: 24, opacity: 0.16, borderRadius: BorderRadius.zero), bottom: const TabBar(tabs: [Tab(text: 'Chat'), Tab(text: 'Notifications')])) ,
+        body: TabBarView(children: [
+          Column(children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Glass(
+                child: Row(children: [
+                  FilledButton.icon(onPressed: _connecting ? null : _connectWs, icon: const Icon(Icons.wifi), label: const Text('Verbinden')),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(onPressed: _fetchInbox, icon: const Icon(Icons.download), label: const Text('Fetch Inbox')),
+                ]),
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                reverse: true,
+                itemCount: _events.length,
+                itemBuilder: (_, i) {
+                  final e = _events[i];
+                  if (e['kind'] == 'action') {
+                    return GlassCard(
+                        child: ListTile(
+                      title: Text(e['title']?.toString() ?? 'Aktion'),
+                      subtitle: Text(const JsonEncoder.withIndent('  ').convert(e['data'] ?? {})),
+                      trailing: FilledButton(onPressed: () => _confirmAction(e), child: const Text('Bestätigen')),
+                    ));
+                  }
+                  return GlassCard(child: ListTile(title: Text(e['text']?.toString() ?? '')));
+                },
+              ),
+            ),
+          ]),
+          RefreshIndicator(
+            onRefresh: () async { await _loadPush(); await PushHistoryStore.setSeenNow(); },
+            child: ListView.builder(
+              itemCount: _pushes.length,
+              itemBuilder: (_, i) {
+                final it = _pushes[i];
+                return GlassCard(child: ListTile(
+                  title: Text(it.title.isEmpty ? 'Notification' : it.title),
+                  subtitle: Text(it.body),
+                  trailing: it.deeplink != null && it.deeplink!.isNotEmpty ? TextButton(onPressed: () {
+                    try { DeepLinks.handleUri(context, Uri.parse(it.deeplink!)); } catch (_) {}
+                  }, child: const Text('Open')) : null,
                 ));
-              }
-              return GlassCard(child: ListTile(title: Text(e['text']?.toString() ?? '')));
-            },
+              },
+            ),
           ),
-        ),
-      ]),
+        ]),
+      ),
     );
   }
 }

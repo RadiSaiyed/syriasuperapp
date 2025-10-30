@@ -12,11 +12,11 @@ from datetime import datetime, timedelta
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 
-class CreateInternalRequestIn:
-    def __init__(self, from_phone: str, to_phone: str, amount_cents: int):
-        self.from_phone = from_phone
-        self.to_phone = to_phone
-        self.amount_cents = amount_cents
+def _valid_phone(p: str) -> bool:
+    if not p or not isinstance(p, str) or not p.startswith("+"):
+        return False
+    digits = p[1:]
+    return digits.isdigit() and len(digits) >= 7
 
 
 @router.post("/requests")
@@ -41,8 +41,10 @@ def create_payment_request_internal(
     from_phone = payload.get("from_phone")
     to_phone = payload.get("to_phone")
     amount_cents = payload.get("amount_cents")
-    if not from_phone or not to_phone or not isinstance(amount_cents, int) or amount_cents <= 0:
+    if not _valid_phone(from_phone) or not _valid_phone(to_phone) or not isinstance(amount_cents, int) or amount_cents <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
+    if idem and len(idem) > 64:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Idempotency key too long")
 
     requester = ensure_user_and_wallet(db, from_phone, None)
     target = db.query(User).filter(User.phone == to_phone).one_or_none()
@@ -68,7 +70,7 @@ def create_payment_request_internal(
         requester_user_id=requester.id,
         target_user_id=target.id,
         amount_cents=amount_cents,
-        currency_code="SYP",
+        currency_code=settings.DEFAULT_CURRENCY,
         status="pending",
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
@@ -108,8 +110,10 @@ def internal_transfer(
     from_phone = payload.get("from_phone")
     to_phone = payload.get("to_phone")
     amount_cents = payload.get("amount_cents")
-    if not from_phone or not to_phone or not isinstance(amount_cents, int) or amount_cents <= 0:
+    if not _valid_phone(from_phone) or not _valid_phone(to_phone) or not isinstance(amount_cents, int) or amount_cents <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
+    if idem and len(idem) > 64:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Idempotency key too long")
 
     # Idempotency: if key provided and transfer exists, return it
     if idem:
@@ -247,7 +251,7 @@ def create_invoice_internal(
     due_in_days = payload.get("due_in_days", 0)
     reference = payload.get("reference")
     description = payload.get("description")
-    if not issuer_phone or not payer_phone or not isinstance(amount_cents, int) or amount_cents <= 0:
+    if not _valid_phone(issuer_phone) or not _valid_phone(payer_phone) or not isinstance(amount_cents, int) or amount_cents <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
 
     issuer = ensure_user_and_wallet(db, issuer_phone, None)
@@ -269,7 +273,7 @@ def create_invoice_internal(
         issuer_user_id=issuer.id,
         payer_user_id=payer.id,
         amount_cents=amount_cents,
-        currency_code="SYP",
+        currency_code=settings.DEFAULT_CURRENCY,
         status="pending",
         reference=reference,
         description=description,

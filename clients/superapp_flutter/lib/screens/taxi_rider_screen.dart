@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_ui/toast.dart';
 import 'package:http/http.dart' as http;
-import '../map_tiles.dart';
-import 'package:flutter_map/flutter_map.dart';
+import '../map_view.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import '../services.dart';
 import '../auth.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
@@ -495,37 +495,21 @@ class _TaxiRiderScreenState extends State<TaxiRiderScreen> {
     return ok == true;
   }
 
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+  void _toast(String msg) { if (!mounted) return; showToast(context, msg); }
 
   Future<void> _geocodeAndSet({required bool forPickup}) async {
-    if (!tomTomConfigured()) {
-      _toast('TomTom API key missing');
-      return;
-    }
     final q = (forPickup ? _addrPickup.text : _addrDropoff.text).trim();
     if (q.isEmpty) return;
     setState(() => _geoLoading = true);
     try {
-      final url = Uri.parse(
-          'https://api.tomtom.com/search/2/geocode/${Uri.encodeComponent(q)}.json?key=${effectiveTomTomKey()}&limit=5');
-      final r = await http.get(url);
-      if (r.statusCode >= 400) {
-        _toast('Geocoding fehlgeschlagen');
-        return;
-      }
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
-      final results = (js['results'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      if (results.isEmpty) {
-      _toast('No address found');
-        return;
-      }
-      Map<String, dynamic> pick(Map<String, dynamic> it) => it;
+      final url = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(q)}&format=json&limit=5');
+      final r = await http.get(url, headers: { 'User-Agent': 'superapp_flutter' });
+      if (r.statusCode >= 400) { _toast('Geocoding failed'); return; }
+      final arr = (jsonDecode(r.body) as List).cast<Map<String, dynamic>>();
+      if (arr.isEmpty) { _toast('No address found'); return; }
       Map<String, dynamic>? chosen;
-      if (results.length == 1) {
-        chosen = results.first;
+      if (arr.length == 1) {
+        chosen = arr.first;
       } else {
         if (!mounted) return;
         chosen = await showDialog<Map<String, dynamic>>(
@@ -534,76 +518,44 @@ class _TaxiRiderScreenState extends State<TaxiRiderScreen> {
             title: const Text('Choose address'),
             content: SizedBox(
               width: 420,
-              child: ListView.builder(
+              child: ListView(
                 shrinkWrap: true,
-                itemCount: results.length,
-                itemBuilder: (ctx, i) {
-                  final it = results[i];
-                  final addr = (it['address'] ?? {}) as Map<String, dynamic>;
-                  final poi = (it['poi'] ?? {}) as Map<String, dynamic>;
-                  final free = (addr['freeformAddress'] ?? poi['name'] ?? q).toString();
-                  return ListTile(
-                    title: Text(free),
-                    onTap: () => Navigator.pop(ctx, pick(it)),
-                  );
-                },
+                children: [
+                  for (final it in arr)
+                    ListTile(
+                      title: Text((it['display_name'] ?? q).toString()),
+                      onTap: () => Navigator.pop(context, it),
+                    )
+                ],
               ),
             ),
-            actions: [
-              TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'))
-            ],
+            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))],
           ),
         );
         if (chosen == null) return;
       }
-      final pos = (chosen['position'] ?? {}) as Map<String, dynamic>;
-      final lat = (pos['lat'] as num?)?.toDouble();
-      final lon = (pos['lon'] as num?)?.toDouble();
-      if (lat == null || lon == null) {
-        _toast('Invalid coordinates');
-        return;
-      }
+      final lat = double.tryParse((chosen['lat'] ?? '').toString());
+      final lon = double.tryParse((chosen['lon'] ?? '').toString());
+      if (lat == null || lon == null) { _toast('Invalid coordinates'); return; }
       setState(() {
-        if (forPickup) {
-          _pickLat = lat;
-          _pickLon = lon;
-        } else {
-          _dropLat = lat;
-          _dropLon = lon;
-        }
+        if (forPickup) { _pickLat = lat; _pickLon = lon; } else { _dropLat = lat; _dropLon = lon; }
       });
-      // Quote wenn beide vorhanden
       if (_pickLat != null && _pickLon != null && _dropLat != null && _dropLon != null && !_loading) {
         _quoteRide();
       }
-    } catch (_) {
-      _toast('Geocoding error');
-    } finally {
-      if (mounted) setState(() => _geoLoading = false);
-    }
+    } catch (_) { _toast('Geocoding error'); }
+    finally { if (mounted) setState(() => _geoLoading = false); }
   }
 
   Future<void> _reverseGeocodeAndFill({required bool forPickup, required double lat, required double lon}) async {
-    if (!tomTomConfigured()) return;
     try {
-      final url = Uri.parse('https://api.tomtom.com/search/2/reverseGeocode/${lat.toStringAsFixed(6)},${lon.toStringAsFixed(6)}.json?key=${effectiveTomTomKey()}&radius=50');
-      final r = await http.get(url);
+      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?lat=${lat.toStringAsFixed(6)}&lon=${lon.toStringAsFixed(6)}&format=json');
+      final r = await http.get(url, headers: { 'User-Agent': 'superapp_flutter' });
       if (r.statusCode >= 400) return;
       final js = jsonDecode(r.body) as Map<String, dynamic>;
-      final addresses = (js['addresses'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      if (addresses.isEmpty) return;
-      final addr = (addresses.first['address'] ?? {}) as Map<String, dynamic>;
-      final free = (addr['freeformAddress'] ?? '').toString();
+      final free = (js['display_name'] ?? '').toString();
       if (free.isEmpty) return;
-      setState(() {
-        if (forPickup) {
-          _addrPickup.text = free;
-        } else {
-          _addrDropoff.text = free;
-        }
-      });
+      setState(() { if (forPickup) { _addrPickup.text = free; } else { _addrDropoff.text = free; } });
     } catch (_) {}
   }
 
@@ -624,32 +576,19 @@ class _TaxiRiderScreenState extends State<TaxiRiderScreen> {
   }
 
   Future<void> _autocomplete({required bool forPickup, required String query}) async {
-    if (!tomTomConfigured()) return;
-    // show busy cursor via focus/indicator instead of explicit loading flag
     try {
-      final url = Uri.parse('https://api.tomtom.com/search/2/search/${Uri.encodeComponent(query)}.json?key=${effectiveTomTomKey()}&limit=6');
-      final r = await http.get(url);
+      final url = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=6&addressdetails=0');
+      final r = await http.get(url, headers: { 'User-Agent': 'superapp_flutter' });
       if (r.statusCode >= 400) return;
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
-      final results = (js['results'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      final mapped = results.map((e) {
-        final addr = (e['address'] ?? {}) as Map<String, dynamic>;
-        final poi = (e['poi'] ?? {}) as Map<String, dynamic>;
-        final free = (addr['freeformAddress'] ?? poi['name'] ?? query).toString();
-        final pos = (e['position'] ?? {}) as Map<String, dynamic>;
-        final lat = (pos['lat'] as num?)?.toDouble();
-        final lon = (pos['lon'] as num?)?.toDouble();
+      final list = (jsonDecode(r.body) as List).cast<Map<String, dynamic>>();
+      final mapped = list.map((e) {
+        final free = (e['display_name'] ?? query).toString();
+        final lat = double.tryParse((e['lat'] ?? '').toString());
+        final lon = double.tryParse((e['lon'] ?? '').toString());
         return { 'text': free, 'lat': lat, 'lon': lon };
       }).where((m) => m['lat'] != null && m['lon'] != null).take(6).toList();
-      setState(() { if (forPickup) {
-        _acPickup = mapped;
-      } else {
-        _acDropoff = mapped;
-      } });
-    } catch (_) {
-    } finally {
-      // no-op
-    }
+      setState(() { if (forPickup) { _acPickup = mapped; } else { _acDropoff = mapped; } });
+    } catch (_) {}
   }
 
   void _selectSuggestion({required bool forPickup, required Map<String, dynamic> s}) {
@@ -1085,37 +1024,18 @@ class _MiniMap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final center = pickup ?? dropoff ?? const LatLng(33.5138, 36.2765);
-    if (!tomTomConfigured()) {
-      return tomTomMissingKeyPlaceholder();
-    }
-
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: Stack(children: [
-        FlutterMap(
-          options: MapOptions(
-            initialCenter: center,
-            initialZoom: 13,
-                onTap: (p, ll) => onTap(ll.latitude, ll.longitude),
-          ),
-          children: [
-            ...tomTomTileLayers(),
-            MarkerLayer(markers: [
-              if (pickup != null)
-                Marker(
-                  point: pickup!,
-                  width: 32,
-                  height: 32,
-                  child: const Icon(Icons.place, color: Colors.green, size: 28),
-                ),
-              if (dropoff != null)
-                Marker(
-                  point: dropoff!,
-                  width: 32,
-                  height: 32,
-                  child: const Icon(Icons.flag, color: Colors.red, size: 28),
-                ),
-            ]),
+        SuperMapView(
+          center: center,
+          zoom: 13,
+          onTap: (lat, lon) => onTap(lat, lon),
+          markers: [
+            if (pickup != null)
+              MapMarker(point: pickup!, color: Colors.green, size: 28),
+            if (dropoff != null)
+              MapMarker(point: dropoff!, color: Colors.red, size: 28),
           ],
         ),
         Positioned(
@@ -1188,38 +1108,24 @@ class _RiderMapFullscreenState extends State<_RiderMapFullscreen> {
         ],
       ),
       body: Stack(children: [
-        FlutterMap(
-          options: MapOptions(
-            initialCenter: _center,
-            initialZoom: 13,
-            onTap: (p, ll) {
-              setState(() {
-                if (_selectingPickup) {
-                  _pickup = ll;
-                } else {
-                  _dropoff = ll;
-                }
-              });
-            },
-          ),
-          children: [
-            ...tomTomTileLayers(),
-            MarkerLayer(markers: [
-              if (_pickup != null)
-                Marker(
-                    point: _pickup!,
-                    width: 36,
-                    height: 36,
-                    child:
-                        const Icon(Icons.place, color: Colors.green, size: 30)),
-              if (_dropoff != null)
-                Marker(
-                    point: _dropoff!,
-                    width: 36,
-                    height: 36,
-                    child:
-                        const Icon(Icons.flag, color: Colors.red, size: 30)),
-            ])
+        SuperMapView(
+          center: _center,
+          zoom: 13,
+          onTap: (lat, lon) {
+            setState(() {
+              final ll = LatLng(lat, lon);
+              if (_selectingPickup) {
+                _pickup = ll;
+              } else {
+                _dropoff = ll;
+              }
+            });
+          },
+          markers: [
+            if (_pickup != null)
+              MapMarker(point: _pickup!, color: Colors.green, size: 30),
+            if (_dropoff != null)
+              MapMarker(point: _dropoff!, color: Colors.red, size: 30),
           ],
         ),
         Positioned(

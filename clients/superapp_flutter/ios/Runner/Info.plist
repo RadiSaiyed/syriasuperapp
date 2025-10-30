@@ -28,8 +28,21 @@
 	<array>
 		<string>payments</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>superapp</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>superapp</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>GMSApiKey</key>
+	<string>AIzaSyB_kkm6v3bw43ENJeLx-plZRLt_tr9aalw</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan QR codes to pay and accept requests.</string>
 	<key>NSContactsUsageDescription</key>

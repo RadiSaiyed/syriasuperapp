@@ -113,11 +113,25 @@ class SharedTheme {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
+      // Ensure all ElevatedButtons match the Taxi button color
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: SharedColors.lime,
+          foregroundColor: Colors.black,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           side: const BorderSide(color: SharedColors.lime),
           foregroundColor: SharedColors.lime,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: SharedColors.lime,
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
       navigationBarTheme: const NavigationBarThemeData(
@@ -138,4 +152,3 @@ class SharedTheme {
     );
   }
 }
-

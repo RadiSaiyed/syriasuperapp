@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 
 class RealEstateScreen extends StatefulWidget {
   const RealEstateScreen({super.key});
@@ -26,8 +28,7 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
   Uri _realEstateUri(String path, {Map<String, String>? query}) =>
       ServiceConfig.endpoint('realestate', path, query: query);
 
-  void _toast(String m) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  void _toast(String m) => showToast(context, m);
 
   // Filter inputs
   final _cityCtrl = TextEditingController();
@@ -65,7 +66,7 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
       final js = jsonDecode(res.body) as Map<String, dynamic>;
       setState(() => _listings = js['listings'] as List? ?? []);
     } catch (e) {
-      _toast('List failed: $e');
+      MessageHost.showErrorBanner(context, 'List failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -73,42 +74,33 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
 
   Future<void> _fav(String id) async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     try {
       final res = await http.post(_realEstateUri('/favorites/$id'), headers: h);
       if (res.statusCode >= 400) throw Exception(res.body);
       _toast('Favorited');
       await _listFavs();
     } catch (e) {
-      _toast('Fav failed: $e');
+      MessageHost.showErrorBanner(context, 'Fav failed: $e');
     }
   }
 
   Future<void> _listFavs() async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     try {
       final res = await http.get(_realEstateUri('/favorites'), headers: h);
       if (res.statusCode >= 400) throw Exception(res.body);
       final js = jsonDecode(res.body) as Map<String, dynamic>;
       setState(() => _favorites = js['items'] as List? ?? []);
     } catch (e) {
-      _toast('Fav list failed: $e');
+      MessageHost.showErrorBanner(context, 'Fav list failed: $e');
     }
   }
 
   Future<void> _inq(String id) async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     try {
       final res = await http.post(_realEstateUri('/inquiries'),
           headers: h,
@@ -117,32 +109,26 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
       _toast('Inquiry sent');
       await _listInq();
     } catch (e) {
-      _toast('Inquiry failed: $e');
+      MessageHost.showErrorBanner(context, 'Inquiry failed: $e');
     }
   }
 
   Future<void> _listInq() async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     try {
       final res = await http.get(_realEstateUri('/inquiries'), headers: h);
       if (res.statusCode >= 400) throw Exception(res.body);
       final js = jsonDecode(res.body) as Map<String, dynamic>;
       setState(() => _inquiries = js['items'] as List? ?? []);
     } catch (e) {
-      _toast('Inquiries failed: $e');
+      MessageHost.showErrorBanner(context, 'Inquiries failed: $e');
     }
   }
 
   Future<void> _reserve(String id) async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
       final res = await http.post(
@@ -159,7 +145,7 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
         }
       }
     } catch (e) {
-      _toast('Reserve failed: $e');
+      MessageHost.showErrorBanner(context, 'Reserve failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -321,10 +307,7 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
 
   Future<void> _ownerQuickCreate() async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login as owner phone');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login as owner phone'); return; }
     setState(() => _loading = true);
     try {
       final uri = _realEstateUri('/owner/listings', query: {
@@ -358,7 +341,7 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
       final js = jsonDecode(res.body) as Map<String, dynamic>;
       setState(() => _myReservations = js['items'] as List? ?? []);
     } catch (e) {
-      _toast('My reservations failed: $e');
+      MessageHost.showErrorBanner(context, 'My reservations failed: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -366,10 +349,7 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
 
   Future<void> _syncReservation(String id) async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login first'); return; }
     try {
       final res = await http.post(
           _realEstateUri('/reservations/$id/sync'),
@@ -379,16 +359,13 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
       await _myRes();
       await _ownerRes();
     } catch (e) {
-      _toast('Sync failed: $e');
+      MessageHost.showErrorBanner(context, 'Sync failed: $e');
     }
   }
 
   Future<void> _ownerList() async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login as owner phone');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login as owner phone'); return; }
     try {
       final res =
           await http.get(_realEstateUri('/owner/listings'), headers: h);
@@ -396,16 +373,13 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
       final js = jsonDecode(res.body) as Map<String, dynamic>;
       setState(() => _myListings = js['items'] as List? ?? []);
     } catch (e) {
-      _toast('Owner listings failed: $e');
+      MessageHost.showErrorBanner(context, 'Owner listings failed: $e');
     }
   }
 
   Future<void> _ownerRes() async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login as owner phone');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login as owner phone'); return; }
     try {
       final res =
           await http.get(_realEstateUri('/owner/reservations'), headers: h);
@@ -413,16 +387,13 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
       final js = jsonDecode(res.body) as Map<String, dynamic>;
       setState(() => _ownerReservations = js['items'] as List? ?? []);
     } catch (e) {
-      _toast('Owner reservations failed: $e');
+      MessageHost.showErrorBanner(context, 'Owner reservations failed: $e');
     }
   }
 
   Future<void> _decide(String id, String decision) async {
     final h = await _realEstateHeaders();
-    if (!h.containsKey('Authorization')) {
-      _toast('Login as owner phone');
-      return;
-    }
+    if (!h.containsKey('Authorization')) { MessageHost.showInfoBanner(context, 'Login as owner phone'); return; }
     try {
       final uri = _realEstateUri('/owner/reservations/$id/decision',
           query: {'decision': decision});
@@ -431,7 +402,7 @@ class _RealEstateScreenState extends State<RealEstateScreen> {
       _toast('Entscheidung: $decision');
       await _ownerRes();
     } catch (e) {
-      _toast('Decision failed: $e');
+      MessageHost.showErrorBanner(context, 'Decision failed: $e');
     }
   }
 }

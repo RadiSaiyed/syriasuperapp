@@ -1,12 +1,15 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import '../ui/glass.dart';
+import 'package:shared_ui/glass.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_ui/message_host.dart';
+import 'package:shared_ui/toast.dart';
 import '../services.dart';
 import 'profile_screen.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'restaurant_admin_screen.dart';
+import 'package:shared_core/shared_core.dart';
 
 class FoodScreen extends StatefulWidget {
   const FoodScreen({super.key});
@@ -112,9 +115,7 @@ class _FoodScreenState extends State<FoodScreen> {
   }) =>
       _foodRequest('DELETE', path,
           query: query, headers: headers, body: body);
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-  }
+  void _toast(String m) { showToast(context, m); }
 
   
 
@@ -397,42 +398,33 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _listRestaurants() async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    final authed = await hasTokenFor('food');
+    if (!authed) { if (!mounted) return; MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
-      final res = await _foodGet(
+      final js = await serviceGetJsonList(
+        'food',
         '/restaurants',
         query: _mineFilter ? {'mine': 'true'} : null,
-        headers: headers,
+        options: const RequestOptions(cacheTtl: Duration(minutes: 10), staleIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as List<dynamic>;
       setState(() {_restaurants = js; _menu = []; _images = []; _reviews = []; _selectedRestaurantId = null; _restaurantsFetched = true;});
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Restaurants failed: $e')));
+      MessageHost.showErrorBanner(context, 'Restaurants failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _listImages(String rid) async {
-    final headers = await _foodHeaders();
     setState(() { _loading = true; _selectedRestaurantId = rid; _images = []; });
     try {
-      final res = await _foodGet(
+      final js = await serviceGetJsonList(
+        'food',
         '/restaurants/$rid/images',
-        headers: headers,
+        options: const RequestOptions(cacheTtl: Duration(minutes: 20), staleIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as List<dynamic>;
       setState(() => _images = js);
     } catch (e) {
       _toast('Images failed: $e');
@@ -505,12 +497,7 @@ class _FoodScreenState extends State<FoodScreen> {
 
   Future<void> _listOrders() async {
     final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Login first')));
-      return;
-    }
+    if (!headers.containsKey('Authorization')) { if (!mounted) return; MessageHost.showInfoBanner(context, 'Login first'); return; }
     setState(() => _loading = true);
     try {
       final res = await _foodGet('/orders', headers: headers);
@@ -519,8 +506,7 @@ class _FoodScreenState extends State<FoodScreen> {
       setState(() {_orders = js['orders'] as List? ?? []; _ordersFetched = true;});
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Orders failed: $e')));
+      MessageHost.showErrorBanner(context, 'Orders failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -530,12 +516,11 @@ class _FoodScreenState extends State<FoodScreen> {
     final headers = await _foodHeaders();
     setState(() { _loading = true; _reviews = []; _selectedRestaurantId = rid; });
     try {
-      final res = await _foodGet(
+      final js = await serviceGetJson(
+        'food',
         '/restaurants/$rid/reviews',
-        headers: headers,
+        options: const RequestOptions(cacheTtl: Duration(minutes: 5), staleIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = (jsonDecode(res.body) as Map<String, dynamic>);
       setState(() => _reviews = ((js['reviews'] as List?) ?? []));
     } catch (e) {
       _toast('Reviews failed: $e');
@@ -567,18 +552,21 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _addReview(String rid, {required int rating, String? comment}) async {
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/restaurants/$rid/reviews',
-        headers: headers,
-        body: jsonEncode({'rating': rating, 'comment': comment}),
+        body: {'rating': rating, 'comment': comment},
+        options: const RequestOptions(idempotent: true, queueIfOffline: true, expectValidationErrors: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       await _listReviews(rid);
     } catch (e) {
-      _toast('Add review failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Bewertung wird gesendet, sobald online.');
+      } else {
+        _toast('Add review failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -596,11 +584,6 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _adminAddMenuItem(String rid, {required String name, required int priceCents, String? description}) async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
     setState(() => _loading = true);
     try {
       final query = {
@@ -608,79 +591,83 @@ class _FoodScreenState extends State<FoodScreen> {
         'price_cents': '$priceCents',
         if (description != null) 'description': description,
       };
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/admin/restaurants/$rid/menu',
         query: query,
-        headers: headers,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       _miNameCtrl.clear();
       _miDescCtrl.clear();
       await _loadMenu(rid);
     } catch (e) {
-      _toast('Add menu item failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Artikel wird erstellt, sobald online.');
+      } else {
+        _toast('Add menu item failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
   }
 
   Future<void> _adminUpdateMenuPrice(String itemId, int newPriceCents) async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
     setState(() => _loading = true);
     try {
-      final res = await _foodPatch(
+      await servicePatchJson(
+        'food',
         '/admin/menu/$itemId',
         query: {'price_cents': '$newPriceCents'},
-        headers: headers,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       if (_selectedRestaurantId != null) await _loadMenu(_selectedRestaurantId!);
     } catch (e) {
-      _toast('Update price failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Preis wird aktualisiert, sobald online.');
+      } else {
+        _toast('Update price failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
   }
 
   Future<void> _adminSetMenuAvailability(String itemId, bool available) async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
     setState(() => _loading = true);
     try {
-      final res = await _foodPatch(
+      await servicePatchJson(
+        'food',
         '/admin/menu/$itemId',
         query: {'available': available ? 'true' : 'false'},
-        headers: headers,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       if (_selectedRestaurantId != null) await _loadMenu(_selectedRestaurantId!);
     } catch (e) {
-      _toast('Set availability failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Verfügbarkeit wird aktualisiert, sobald online.');
+      } else {
+        _toast('Set availability failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
   }
 
   Future<void> _adminDeleteMenuItem(String itemId) async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
     setState(() => _loading = true);
     try {
-      final res = await _foodDelete('/admin/menu/$itemId', headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
+      await serviceDelete(
+        'food',
+        '/admin/menu/$itemId',
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
+      );
       if (_selectedRestaurantId != null) await _loadMenu(_selectedRestaurantId!);
     } catch (e) {
-      _toast('Delete item failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Löschen wird ausgeführt, sobald online.');
+      } else {
+        _toast('Delete item failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -718,45 +705,43 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _adminAddImages(String rid, List<Map<String, dynamic>> images) async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
     setState(() => _loading = true);
     try {
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/admin/restaurants/$rid/images',
-        headers: headers,
-        body: jsonEncode(images),
+        body: images,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       _imageUrlCtrl.clear();
       await _listImages(rid);
     } catch (e) {
-      _toast('Add image failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Bild wird hinzugefügt, sobald online.');
+      } else {
+        _toast('Add image failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
   }
 
   Future<void> _addToCart(String menuItemId) async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
     setState(() => _loading = true);
     try {
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/cart/items',
-        headers: headers,
-        body: jsonEncode({'menu_item_id': menuItemId, 'qty': 1}),
+        body: {'menu_item_id': menuItemId, 'qty': 1},
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       await _loadCart();
     } catch (e) {
-      _toast('Add failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Warenkorb wird aktualisiert, sobald online.');
+      } else {
+        _toast('Add failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -766,19 +751,21 @@ class _FoodScreenState extends State<FoodScreen> {
     if (qty <= 0) {
       qty = 0; // backend may remove on zero or reject; try update first
     }
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodPut(
+      await servicePutJson(
+        'food',
         '/cart/items/$itemId',
-        headers: headers,
-        body: jsonEncode(
-            {'menu_item_id': _cartItemMenuId(itemId), 'qty': qty}),
+        body: {'menu_item_id': _cartItemMenuId(itemId), 'qty': qty},
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       await _loadCart();
     } catch (e) {
-      _toast('Update failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Warenkorb wird aktualisiert, sobald online.');
+      } else {
+        _toast('Update failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -809,20 +796,25 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _checkout() async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
     setState(() => _loading = true);
     try {
-      final res = await _foodPost('/orders/checkout', headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
-      _toast('Bestellung erstellt: ${js['id']}');
+      final js = await servicePostJson(
+        'food',
+        '/orders/checkout',
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
+      );
+      if (js.isNotEmpty && js['id'] != null) {
+        _toast('Bestellung erstellt: ${js['id']}');
+      } else {
+        _toast('Offline – Bestellung wird gesendet, sobald online.');
+      }
       await _listOrders();
     } catch (e) {
-      _toast('Checkout failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Bestellung wird gesendet, sobald online.');
+      } else {
+        _toast('Checkout failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -830,19 +822,15 @@ class _FoodScreenState extends State<FoodScreen> {
 
   // Favorites
   Future<void> _listFavorites() async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    final authed = await hasTokenFor('food');
+    if (!authed) { _toast('Login first'); return; }
     setState(() => _loading = true);
     try {
-      final res = await _foodGet(
+      final js = await serviceGetJsonList(
+        'food',
         '/restaurants/favorites',
-        headers: headers,
+        options: const RequestOptions(cacheTtl: Duration(minutes: 10), staleIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as List<dynamic>;
       setState(() {_favorites = js; _favoritesFetched = true;});
     } catch (e) {
       _toast('Favorites failed: $e');
@@ -852,19 +840,15 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _listMyRestaurants() async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
+    final authed = await hasTokenFor('food');
+    if (!authed) { _toast('Login first'); return; }
     setState(() => _loading = true);
     try {
-      final res = await _foodGet(
+      final js = await serviceGetJsonList(
+        'food',
         '/admin/restaurants/mine',
-        headers: headers,
+        options: const RequestOptions(cacheTtl: Duration(minutes: 10), staleIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as List<dynamic>;
       setState(() {_restaurants = js; _menu = []; _images = []; _reviews = []; _selectedRestaurantId = null; _restaurantsFetched = true;});
     } catch (e) {
       _toast('Meine Restaurants failed: $e');
@@ -895,11 +879,18 @@ class _FoodScreenState extends State<FoodScreen> {
       return;
     }
     try {
-      final res = await _foodPost('/restaurants/$rid/favorite', headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
+      await servicePost(
+        'food',
+        '/restaurants/$rid/favorite',
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
+      );
       await _listFavorites();
     } catch (e) {
-      _toast('Fav failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Favorit wird synchronisiert.');
+      } else {
+        _toast('Fav failed: $e');
+      }
     }
   }
 
@@ -934,11 +925,18 @@ class _FoodScreenState extends State<FoodScreen> {
       return;
     }
     try {
-      final res = await _foodDelete('/restaurants/$rid/favorite', headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
+      await serviceDelete(
+        'food',
+        '/restaurants/$rid/favorite',
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
+      );
       await _listFavorites();
     } catch (e) {
-      _toast('Unfav failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Entfernen wird synchronisiert.');
+      } else {
+        _toast('Unfav failed: $e');
+      }
     }
   }
 
@@ -967,16 +965,13 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _adminListOrders() async {
-    final headers = await _foodHeaders();
-    if (!headers.containsKey('Authorization')) {
-      _toast('Login first');
-      return;
-    }
     setState(() => _loading = true);
     try {
-      final res = await _foodGet('/admin/orders', headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await serviceGetJson(
+        'food',
+        '/admin/orders',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 1), staleIfOffline: true),
+      );
       setState(() { _adminOrders = (js['orders'] as List?) ?? []; _adminFetched = true; });
     } catch (e) {
       _toast('Admin orders failed: $e');
@@ -1007,18 +1002,21 @@ class _FoodScreenState extends State<FoodScreen> {
 
   Future<void> _adminUpdateStatus(Map<String, dynamic> o, String statusValue) async {
     final id = o['id'] as String;
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/admin/orders/$id/status',
         query: {'status_value': statusValue},
-        headers: headers,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       await _adminListOrders();
     } catch (e) {
-      _toast('Update status failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Statusänderung wird gesendet, sobald online.');
+      } else {
+        _toast('Update status failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -1026,12 +1024,13 @@ class _FoodScreenState extends State<FoodScreen> {
 
   // Courier
   Future<void> _courierListAvailable() async {
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodGet('/courier/available', headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await serviceGetJson(
+        'food',
+        '/courier/available',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 2), staleIfOffline: true),
+      );
       setState(() => _courierAvailable = (js['orders'] as List?) ?? []);
     } catch (e) {
       _toast('Courier available failed: $e');
@@ -1041,12 +1040,13 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _courierMyOrders() async {
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodGet('/courier/orders', headers: headers);
-      if (res.statusCode >= 400) throw Exception(res.body);
-      final js = jsonDecode(res.body) as Map<String, dynamic>;
+      final js = await serviceGetJson(
+        'food',
+        '/courier/orders',
+        options: const RequestOptions(cacheTtl: Duration(minutes: 2), staleIfOffline: true),
+      );
       setState(() => _courierOrders = (js['orders'] as List?) ?? []);
     } catch (e) {
       _toast('Courier orders failed: $e');
@@ -1056,68 +1056,80 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _courierAccept(String orderId) async {
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/courier/orders/$orderId/accept',
-        headers: headers,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       await _courierMyOrders();
     } catch (e) {
-      _toast('Courier accept failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Auftrag wird angenommen, sobald online.');
+      } else {
+        _toast('Courier accept failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
   }
 
   Future<void> _courierPickedUp(String orderId) async {
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/courier/orders/$orderId/picked_up',
-        headers: headers,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       await _courierMyOrders();
     } catch (e) {
-      _toast('Courier picked up failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Status wird gesendet, sobald online.');
+      } else {
+        _toast('Courier picked up failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
   }
 
   Future<void> _courierDelivered(String orderId) async {
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/courier/orders/$orderId/delivered',
-        headers: headers,
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
       await _courierMyOrders();
     } catch (e) {
-      _toast('Courier deliver failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Zustellung wird synchronisiert.');
+      } else {
+        _toast('Courier deliver failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }
   }
 
   Future<void> _courierUpdateLocation(String orderId, double lat, double lon) async {
-    final headers = await _foodHeaders();
     setState(() => _loading = true);
     try {
-      final res = await _foodPost(
+      await servicePost(
+        'food',
         '/courier/orders/$orderId/location',
-        headers: headers,
-        body: jsonEncode({'lat': lat, 'lon': lon}),
+        body: {'lat': lat, 'lon': lon},
+        options: const RequestOptions(idempotent: true, queueIfOffline: true),
       );
-      if (res.statusCode >= 400) throw Exception(res.body);
     } catch (e) {
-      _toast('Courier update location failed: $e');
+      if (e is CoreError && e.kind == CoreErrorKind.network && (e.details?['queued'] == true)) {
+        _toast('Offline – Position wird synchronisiert.');
+      } else {
+        _toast('Courier update location failed: $e');
+      }
     } finally {
       setState(() => _loading = false);
     }

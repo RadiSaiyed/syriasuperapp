@@ -80,8 +80,14 @@ E2E Flow (Food ↔ Payments)
 - Confirm (simulate)
   - Accept in Payments to emit `requests.accept` (with `transfer_id`), or simulate by posting to Food `/payments/webhooks` with signed headers and body `{"type":"requests.accept","data":{"id":"PR_ID","transfer_id":"TR_ID"}}`.
   - Food marks order `accepted` and stores `payment_transfer_id`.
-- Cancel → Refund
+  - Cancel → Refund
   - Owner cancels after acceptance: Food emits `refund.requested` webhook `{order_id, transfer_id, amount_cents}`; upon `refunds.create` event, sets `refund_status=completed`.
+
+Make targets (Dev)
+- `make up` — startet Payments + Food (DB/Redis/API)
+- `make food-webhook` — registriert den Food‑Webhook in Payments (`http://host.docker.internal:8090/payments/webhooks`, Secret `demo_secret`)
+- `make e2e` — erstellt bei Bedarf Demo‑Restaurant und Menü, Checkout → Payment Request → Annahme in Payments → Bestellungen auflisten
+- `make down` — stoppt beide Stacks inkl. Volumes
 
 Admin cURL (Owner)
 - Update restaurant: `PATCH /admin/restaurants/{id}?name=New&city=Damascus&address=Main`

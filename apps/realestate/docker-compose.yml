@@ -24,7 +24,7 @@ services:
     ports:
       - "8092:8092"
     networks:
-      - internal
+      - default
       - web
     labels:
       - "traefik.enable=true"

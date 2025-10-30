@@ -46,13 +46,15 @@ API (MVP)
     - Query: `start`, `end` (ISO date). Defaults to next 30 days.
     - Response: `{ unit_id, days: [{date, available_units, price_cents}] }`
     - Availability accounts for maintenance blocks (unit‑blocking) and dynamic daily prices; total includes cleaning fee.
-  - `GET  /properties/top` — recommended properties (by rating + popularity), optional `city`, `rating_band`, `limit`
-  - `GET  /properties/nearby` — nearby properties by radius: `lat`, `lon`, optional `rating_band`, `radius_km`, `limit`
+  - `GET  /properties/top` — recommended properties (by rating + popularity), optional `city`, `rating_band`, `limit`, `offset`
+    - Pagination headers: `X-Total-Count` and RFC5988 `Link` with `prev`/`next`
+  - `GET  /properties/nearby` — nearby properties by radius: `lat`, `lon`, optional `rating_band`, `radius_km`, `limit`, `offset`
+    - Returns per-item `distance_km`; pagination headers: `X-Total-Count` and `Link`
   - `GET  /suggest` — search suggestions for cities and properties: `q`, optional `limit`
   - `GET  /cities/popular` — popular cities by property count
     - Response includes `avg_rating`, a representative `image_url`, `min_price_cents`, and `rating_bands` (counts of properties by average rating band: `5`, `4+`, `3+`, `2+`, `1+`).
   - Caching & headers:
-    - `/cities/popular`, `/properties/top`, `/properties/nearby`, `/suggest` set `Cache-Control: public, max-age=...` and ETag headers; some vary by `Authorization`.
+    - `/cities/popular`, `/properties` (list), `/properties/top`, `/properties/nearby`, `/suggest` set `Cache-Control: public, max-age=...` and ETag headers; some vary by `Authorization`. Conditional requests with `If-None-Match` may return `304 Not Modified`.
 - Host (property owner)
   - `POST /host/properties` — create property
   - `GET  /host/properties` — list my properties
@@ -86,7 +88,7 @@ API (MVP)
   - `GET  /webhooks/endpoints` — list endpoints
   - `POST /webhooks/endpoints` — add endpoint `{url, secret}`
   - `DELETE /webhooks/endpoints/{id}` — delete endpoint
-  - `POST /webhooks/test` — emit `webhook.test`
+ - `POST /webhooks/test` — emit `webhook.test`
  - Payments Integration
    - On reservation create, a Payment Request is created (host→guest) via Payments `/internal/requests` using HMAC headers. Stores `payment_request_id`.
    - Incoming payments webhook: `POST /payments/webhooks` — expects headers `X-Webhook-Ts`, `X-Webhook-Event`, `X-Webhook-Sign` (HMAC_SHA256(secret, ts + event + body)); on `requests.accept(ed)` it marks matching reservation as `confirmed` by `payment_request_id`.
@@ -101,7 +103,13 @@ Notes
   - `PAYMENTS_BASE_URL` (e.g. http://host.docker.internal:8080)
   - `PAYMENTS_INTERNAL_SECRET` (must match Payments INTERNAL_API_SECRET)
 - Webhook delivery: enable with `WEBHOOK_ENABLED=true`; headers `X-Webhook-Event`, `X-Webhook-Ts`, `X-Webhook-Sign` (HMAC_SHA256(secret, ts + event + body))
- - Payments inbound webhook verification: set `PAYMENTS_WEBHOOK_SECRET` to match Payments merchant endpoint secret.
+- Payments inbound webhook verification: set `PAYMENTS_WEBHOOK_SECRET` to match Payments merchant endpoint secret.
+
+Make targets (Dev)
+- `make up` — startet Payments + Stays (DB/Redis/API)
+- `make stays-webhook` — registriert den Stays‑Webhook in Payments (`http://host.docker.internal:8088/payments/webhooks`, Secret `demo_secret`)
+- `make e2e` — Host legt Property+Unit an, Guest reserviert → Payment Request → Annahme in Payments → Reservierungen anzeigen
+- `make down` — stoppt beide Stacks inkl. Volumes
 
 Demo data (seed)
 - Start DB + API first (see above or `make stays-up`).

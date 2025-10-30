@@ -42,10 +42,12 @@ def verify_request(db: Session, key_id: str, sign: str, ts: str, path: str, body
             r = None
         if r is not None:
             key_replay = f"merchant_hmac_replay:{key_id}:{sign}"
-            if r.get(key_replay):
-                return None
             try:
-                r.setex(key_replay, 300, 1)  # 5 minutes
+                # Atomic set-if-absent with TTL prevents race between get/set
+                ok = r.set(key_replay, 1, nx=True, ex=300)  # 5 minutes
+                if not ok:
+                    return None
             except Exception:
+                # On Redis errors, degrade gracefully (no hard fail)
                 pass
     return str(key.user_id)

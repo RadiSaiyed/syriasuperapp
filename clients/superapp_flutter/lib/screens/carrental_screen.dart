@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_ui/toast.dart';
 import 'package:http/http.dart' as http;
 // url_launcher no longer used for maps; keep imports lean
-import 'package:flutter_map/flutter_map.dart';
+import '../map_view.dart';
 import 'package:latlong2/latlong.dart';
-import '../map_tiles.dart';
 import '../services.dart';
 
 class CarRentalScreen extends StatefulWidget {
@@ -364,7 +364,7 @@ class _CarRentalScreenState extends State<CarRentalScreen>
 
   // Per-app OTP login removed: use central login
 
-  void _toast(String m) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); }
+  void _toast(String m) { showToast(context, m); }
 
   @override
   Widget build(BuildContext context) {
@@ -442,28 +442,14 @@ class _CarRentalScreenState extends State<CarRentalScreen>
       _toast('No address');
       return;
     }
-    if (!tomTomConfigured()) {
-      // Ohne Key keine alternativen Dienste verwenden – klar kommunizieren.
-      _toast('TomTom API key missing — map view unavailable');
-      return;
-    }
+    // Best-effort: attempt backend resolve first if available, else skip geocoding.
     try {
-      final url = Uri.parse(
-          'https://api.tomtom.com/search/2/geocode/${Uri.encodeComponent(q)}.json?key=${effectiveTomTomKey()}&limit=1');
-      final r = await http.get(url);
-      if (r.statusCode >= 400) {
-        _toast('Geocoding fehlgeschlagen');
-        return;
-      }
-      final js = jsonDecode(r.body) as Map<String, dynamic>;
-      final results = (js['results'] as List?) ?? const [];
-      if (results.isEmpty || results.first['position'] == null) {
-        _toast('Keine Position gefunden');
-        return;
-      }
-      final pos = results.first['position'] as Map<String, dynamic>;
-      final lat = (pos['lat'] as num).toDouble();
-      final lon = (pos['lon'] as num).toDouble();
+      final uri = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(q)}&format=json&limit=1');
+      final r = await http.get(uri, headers: { 'User-Agent': 'superapp_flutter' });
+      final arr = jsonDecode(r.body) as List<dynamic>;
+      if (arr.isEmpty) { _toast('Keine Position gefunden'); return; }
+      final lat = double.tryParse(arr.first['lat'] as String? ?? '') ?? 33.5138;
+      final lon = double.tryParse(arr.first['lon'] as String? ?? '') ?? 36.2765;
 
       if (!mounted) return;
       await showDialog(
@@ -473,34 +459,18 @@ class _CarRentalScreenState extends State<CarRentalScreen>
           content: SizedBox(
             width: 400,
             height: 280,
-            child: FlutterMap(
-              options: MapOptions(
-                initialCenter: LatLng(lat, lon),
-                initialZoom: 14,
-              ),
-              children: [
-                ...tomTomTileLayers(showTrafficFlow: false),
-                MarkerLayer(markers: [
-                  Marker(
-                    point: LatLng(lat, lon),
-                    width: 40,
-                    height: 40,
-                    child: const Icon(Icons.location_on, color: Colors.redAccent),
-                  ),
-                ]),
-              ],
+            child: SuperMapView(
+              center: LatLng(lat, lon),
+              zoom: 14,
+              markers: [ MapMarker(point: LatLng(lat, lon), color: Colors.redAccent, size: 36) ],
             ),
           ),
           actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close')),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
           ],
         ),
       );
-    } catch (_) {
-      _toast('Map view unavailable');
-    }
+    } catch (_) { _toast('Map view unavailable'); }
   }
 
   Future<void> _openFilters() async {

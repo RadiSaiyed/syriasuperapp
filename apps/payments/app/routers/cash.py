@@ -46,7 +46,7 @@ def create_cashin(
         existing = db.query(CashRequest).filter(CashRequest.idempotency_key == idem_key).one_or_none()
         if existing is not None:
             return _to_out(db, existing)
-    r = CashRequest(type="cashin", user_id=user.id, amount_cents=payload.amount_cents, currency_code="SYP", idempotency_key=idem_key)
+    r = CashRequest(type="cashin", user_id=user.id, amount_cents=payload.amount_cents, currency_code=settings.DEFAULT_CURRENCY, idempotency_key=idem_key)
     db.add(r)
     db.flush()
     return _to_out(db, r)
@@ -64,7 +64,7 @@ def create_cashout(
         existing = db.query(CashRequest).filter(CashRequest.idempotency_key == idem_key).one_or_none()
         if existing is not None:
             return _to_out(db, existing)
-    r = CashRequest(type="cashout", user_id=user.id, amount_cents=payload.amount_cents, currency_code="SYP", idempotency_key=idem_key)
+    r = CashRequest(type="cashout", user_id=user.id, amount_cents=payload.amount_cents, currency_code=settings.DEFAULT_CURRENCY, idempotency_key=idem_key)
     db.add(r)
     db.flush()
     return _to_out(db, r)
