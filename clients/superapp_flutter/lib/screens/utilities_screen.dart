@@ -335,8 +335,6 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
   Future<void> _doSearch() async {
     setState(() => _loading = true);
     try {
-      final t = await getTokenFor('utilities', store: _tokens);
-      final uri = _utilitiesUri('/help/search', query: {'q': _searchCtrl.text.trim()});
       final js = await serviceGetJson(
         'utilities',
         '/help/search',

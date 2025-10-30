@@ -36,7 +36,8 @@ Endpoints
   - POST `/v1/push/dev/broadcast_topic` — broadcast to a topic `{topic, title, body, deeplink?}`
 
 Security (dev push endpoints)
-- Dev endpoints under `/v1/push/dev/*` require admin when `APP_ENV=prod` or when `PUSH_DEV_ALLOW_ALL=false`.
+- Dev endpoints under `/v1/push/dev/*` require admin by default.
+- Set `PUSH_DEV_ALLOW_ALL=true` to relax in non‑prod (not recommended).
 - Admin detection checks token claims: `role` in {admin, owner, operator, ops}, `is_admin=true`, or permissions/scopes include `admin`/`push:admin`/`push:send`.
 - Allowlists are supported via env:
   - `PUSH_DEV_ALLOWED_PHONES` — comma‑separated phone list

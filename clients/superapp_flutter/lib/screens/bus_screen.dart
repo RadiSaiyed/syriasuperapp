@@ -190,10 +190,7 @@ class _BusScreenState extends State<BusScreen> {
 
   // Per-app OTP login removed: use central login
 
-  void _toast(String m) {
-    if (!mounted) return;
-    showToast(context, m);
-  }
+  // _toast removed (unused)
 
   @override
   Widget build(BuildContext context) {

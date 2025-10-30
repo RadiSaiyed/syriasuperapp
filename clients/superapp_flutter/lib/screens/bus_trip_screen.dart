@@ -147,7 +147,6 @@ class _BusTripScreenState extends State<BusTripScreen> {
       }
       final bioOk = await requireBiometricIfEnabled(context, reason: 'Confirm payment');
       if (!bioOk) throw Exception('Payment canceled');
-      final idempotencyKey = 'bus-$bookingId-${DateTime.now().millisecondsSinceEpoch}';
       try {
         await servicePostJson(
           'payments',
@@ -156,15 +155,13 @@ class _BusTripScreenState extends State<BusTripScreen> {
           options: const RequestOptions(idempotent: true, expectValidationErrors: true),
         );
       } catch (error) {
-        if (bookingId != null) {
-          try {
-            await servicePost(
-              _service,
-              '/bookings/$bookingId/cancel',
-              options: const RequestOptions(idempotent: true),
-            );
-          } catch (_) {}
-        }
+        try {
+          await servicePost(
+            _service,
+            '/bookings/$bookingId/cancel',
+            options: const RequestOptions(idempotent: true),
+          );
+        } catch (_) {}
         rethrow;
       }
 

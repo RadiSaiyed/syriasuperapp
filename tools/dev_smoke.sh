@@ -15,6 +15,9 @@ echo "[smoke] Token (len=${#TOK})"
 echo "[smoke] POST /stays/dev/seed"
 curl -fsS -X POST "$BFF_BASE/stays/dev/seed" -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' | jq -c '.'
 
+echo "[smoke] POST /chat/dev/seed"
+curl -fsS -X POST "$BFF_BASE/chat/dev/seed" -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' | jq -c '.'
+
 echo "[smoke] GET /v1/me"
 curl -fsS "$BFF_BASE/v1/me" -H "Authorization: Bearer $TOK" | jq -c '{user, services: {payments: .services.payments, chat: (.services.chat|{conversations: (.conversations|length)})}}'
 
@@ -28,4 +31,3 @@ echo "[smoke] GET /chat/messages/inbox (auth)"
 curl -fsS "$BFF_BASE/chat/messages/inbox" -H "Authorization: Bearer $TOK" | jq -c '.'
 
 echo "[smoke] OK"
-

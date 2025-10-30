@@ -222,9 +222,13 @@ class _CarMarketScreenState extends State<CarMarketScreen> {
                         if (est != null) {
                           final estC = (est['estimate_cents'] ?? 0) as int;
                           final diff = (price - estC).abs() / (estC == 0 ? 1 : estC);
-                          if (diff <= 0.1) badge = 'FAIR';
-                          else if (price < estC) badge = 'GÜNSTIG';
-                          else badge = 'TEUER';
+                          if (diff <= 0.1) {
+                            badge = 'FAIR';
+                          } else if (price < estC) {
+                            badge = 'GÜNSTIG';
+                          } else {
+                            badge = 'TEUER';
+                          }
                         }
                         return Card(
                             child: ListTile(
@@ -234,7 +238,7 @@ class _CarMarketScreenState extends State<CarMarketScreen> {
                           trailing: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
                             Text('${(price) ~/ 1000}k'),
                             const SizedBox(height: 4),
-                            if (badge != null) Text(badge!, style: TextStyle(color: badge=='TEUER'? Colors.red: badge=='GÜNSTIG'? Colors.green: Colors.orange, fontSize: 12)),
+                            if (badge != null) Text(badge, style: TextStyle(color: badge=='TEUER'? Colors.red: badge=='GÜNSTIG'? Colors.green: Colors.orange, fontSize: 12)),
                             if (badge == null) TextButton(onPressed: () => _estimate(id), child: const Text('Check Preis')),
                           ]),
                         ));

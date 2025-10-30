@@ -341,8 +341,8 @@ def _is_admin_token(authz: str) -> bool:
 def _require_push_dev_access(authorization: str | None):
     if authorization is None or not authorization.strip():
         raise HTTPException(status_code=401, detail="missing bearer token")
-    # Default: allow in non-prod unless explicitly disabled
-    allow_non_prod = os.getenv("PUSH_DEV_ALLOW_ALL", "true").lower() == "true"
+    # Default: require admin unless explicitly allowed via env
+    allow_non_prod = os.getenv("PUSH_DEV_ALLOW_ALL", "false").lower() == "true"
     if APP_ENV != "prod" and allow_non_prod:
         return
     if not _is_admin_token(authorization):
