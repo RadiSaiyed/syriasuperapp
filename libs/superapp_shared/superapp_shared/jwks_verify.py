@@ -1,6 +1,7 @@
 import time
 import httpx
 import jwt
+from jwt import PyJWKClient
 from typing import Any, Dict
 
 _CACHE: dict[str, tuple[float, Dict[str, Any]]] = {}
@@ -20,17 +21,8 @@ def _fetch_jwks(jwks_url: str) -> Dict[str, Any]:
 
 
 def decode_with_jwks(token: str, jwks_url: str, audience: str | None = None, issuer: str | None = None) -> Dict[str, Any]:
-    unverified = jwt.get_unverified_header(token)
-    kid = unverified.get('kid')
-    jwks = _fetch_jwks(jwks_url)
-    keys = jwks.get('keys', [])
-    public_key = None
-    for k in keys:
-        if kid is None or k.get('kid') == kid:
-            public_key = jwt.algorithms.RSAAlgorithm.from_jwk(k)
-            break
-    if public_key is None:
-        raise jwt.InvalidTokenError('No matching key')
+    # Use PyJWT's JWK client to pick correct key by kid
+    client = PyJWKClient(jwks_url)
+    signing_key = client.get_signing_key_from_jwt(token).key
     options = {"require": ["exp", "iat", "sub"], "verify_aud": audience is not None}
-    return jwt.decode(token, public_key, algorithms=["RS256"], audience=audience, issuer=issuer, options=options)
-
+    return jwt.decode(token, signing_key, algorithms=["RS256"], audience=audience, issuer=issuer, options=options)

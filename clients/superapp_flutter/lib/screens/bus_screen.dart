@@ -41,7 +41,6 @@ class _BusScreenState extends State<BusScreen> {
   String _destination = 'Aleppo';
   DateTime? _date = DateTime.now();
   final List<Map<String, dynamic>> _results = [];
-  final _tokens = MultiTokenStore();
   bool _bookingsLoading = false;
   List<Map<String, dynamic>> _upcomingBookings = [];
   List<Map<String, dynamic>> _pastBookings = [];

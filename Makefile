@@ -192,8 +192,26 @@ bff-up:
 bff-down:
 	cd apps/bff && docker compose down || true
 
-bff-run:
+	bff-run:
 	ENV=dev APP_PORT=8070 PYTHONPATH=. python3 -m apps.bff.app.main
+
+# Core stack helpers (Payments, Chat, Commerce, Stays, BFF)
+core-up:
+	cd apps/payments && docker compose up -d db redis api
+	cd apps/chat && docker compose up -d db redis api
+	cd apps/commerce && docker compose up -d db redis api
+	cd apps/stays && docker compose up -d db redis api
+	cd apps/bff && docker compose up -d --build
+
+core-down:
+	cd apps/bff && docker compose down || true
+	cd apps/stays && docker compose down || true
+	cd apps/commerce && docker compose down || true
+	cd apps/chat && docker compose down || true
+	cd apps/payments && docker compose down || true
+
+smoke-core:
+	./tools/dev_smoke.sh ${BFF_BASE:-http://localhost:8070}
 
 up-all:
 	cd apps/payments && docker compose up -d db redis api

@@ -18,6 +18,7 @@ services:
       - .env
     environment:
       DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/parking_onstreet
+      JWT_JWKS_URL: ${JWT_JWKS_URL:-http://host.docker.internal:8080/.well-known/jwks.json}
     ports:
       - "8096:8096"
     networks:

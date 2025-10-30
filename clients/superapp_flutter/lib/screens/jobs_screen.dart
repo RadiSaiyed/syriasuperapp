@@ -4,7 +4,6 @@ import 'package:http/http.dart' as http;
 import '../services.dart';
 import 'ai_gateway_screen.dart';
 import 'package:shared_ui/message_host.dart';
-import 'package:shared_ui/toast.dart';
 import '../animations.dart';
 import 'package:shared_ui/glass.dart';
 
@@ -74,7 +73,6 @@ class _JobsScreenState extends State<JobsScreen> {
     }
   }
 
-  void _toast(String m) { showToast(context, m); }
 
   @override
   Widget build(BuildContext context) {

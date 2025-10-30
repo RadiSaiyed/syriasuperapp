@@ -90,7 +90,6 @@ class _GoogleMapView extends StatefulWidget {
 }
 
 class _GoogleMapViewState extends State<_GoogleMapView> {
-  gmap.GoogleMapController? _ctrl;
 
   @override
   Widget build(BuildContext context) {
@@ -126,7 +125,7 @@ class _GoogleMapViewState extends State<_GoogleMapView> {
       myLocationEnabled: false,
       zoomControlsEnabled: false,
       trafficEnabled: widget.showTraffic,
-      onMapCreated: (c) => _ctrl = c,
+      onMapCreated: (c) {},
       onTap: widget.onTap != null
           ? (pos) => widget.onTap!(pos.latitude, pos.longitude)
           : null,

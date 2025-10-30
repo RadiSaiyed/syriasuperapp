@@ -152,7 +152,6 @@ class _AIGatewayScreenState extends State<AIGatewayScreen> {
     try {
       final parts = token.split('.');
       if (parts.length < 2) return null;
-      final payload = utf8.decode(base64Url.normalize(parts[1]).codeUnits);
       final map = jsonDecode(String.fromCharCodes(base64Url.decode(parts[1])));
       return (map as Map<String, dynamic>)['sub'] as String?;
     } catch (_) {

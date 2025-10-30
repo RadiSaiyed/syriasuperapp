@@ -18,3 +18,12 @@ Why
 Notes
 - CI workflows referencing removed client paths may need to be updated.
 - Documentation and READMEs have been adjusted to reflect the unified client.
+
+Oct 30 — Client module simplification and server polish
+- Deleted `clients/superapp_flutter/lib/apps/chat_module.dart` (external chat_flutter embedding).
+- Deleted `clients/superapp_flutter/lib/apps/taxi_module.dart` (external taxi_flutter embedding).
+- Deep‑links now call Taxi REST directly via the shared HTTP client; no external module interop.
+- Main navigation uses built‑in `InboxScreen` (Chat) and `TaxiScreen` (Taxi).
+- BFF catch‑all proxy returns a concrete `Response` (fixed 500 on proxied POST).
+- Stays auth: fixed UUID casting fallback; resolved an IndentationError.
+- Dev seeds added: Chat `POST /dev/seed`, Stays `POST /dev/seed` to stabilize local tests.

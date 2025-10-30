@@ -11,6 +11,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:flutter_map/flutter_map.dart';
 import '../ui/errors.dart';
 import '../animations.dart';
+import 'stays_favorites_screen.dart';
+import 'stays_reservations_screen.dart';
 
 class StaysScreen extends StatefulWidget {
   final String? initialCity;

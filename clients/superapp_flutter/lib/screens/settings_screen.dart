@@ -3,9 +3,9 @@ import 'package:shared_ui/glass.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../privacy.dart';
-import '../whats_new.dart';
 import '../animations.dart';
 import '../chat_unread.dart';
+import '../haptics.dart';
 // Removed debug imports
 
 class SettingsScreen extends StatefulWidget {

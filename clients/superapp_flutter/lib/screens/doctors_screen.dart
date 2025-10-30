@@ -1,9 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../services.dart';
 import 'package:shared_core/shared_core.dart';
 import 'package:shared_ui/message_host.dart';
-import 'package:shared_ui/toast.dart';
 import '../animations.dart';
 import 'package:shared_ui/glass.dart';
 
@@ -37,8 +35,6 @@ class DoctorsScreen extends StatefulWidget {
 class _DoctorsScreenState extends State<DoctorsScreen> {
   String _health = '?';
   bool _loading = false;
-  Uri _doctorsUri(String path, {Map<String, String>? query}) =>
-      ServiceConfig.endpoint('doctors', path, query: query);
   Future<void> _healthCheck() async {
     setState(() => _loading = true);
     try {
@@ -54,8 +50,6 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
       setState(() => _loading = false);
     }
   }
-
-  void _toast(String m) { showToast(context, m); }
 
   @override
   Widget build(BuildContext context) {

@@ -36,6 +36,10 @@ services:
     environment:
       UVICORN_WORKERS: ${UVICORN_WORKERS:-4}
       UVICORN_LOG_LEVEL: ${UVICORN_LOG_LEVEL:-info}
+      # Issue RS256 tokens and publish JWKS for unified login
+      JWT_ALG: ${JWT_ALG:-RS256}
+      JWT_ISSUER: ${JWT_ISSUER:-payments}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-users}
     depends_on:
       db:
         condition: service_healthy

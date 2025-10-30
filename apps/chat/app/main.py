@@ -96,6 +96,13 @@ def create_app() -> FastAPI:
     app.include_router(ws_router)
     app.include_router(internal_tools_router.router)
     app.include_router(payments_webhook_router.router)
+    # Dev-only helpers
+    if settings.ENV.lower() == "dev":
+        try:
+            from .routers import dev_seed as dev_seed_router
+            app.include_router(dev_seed_router.router)
+        except Exception:
+            pass
     return app
 
 

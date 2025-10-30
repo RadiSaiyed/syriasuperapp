@@ -93,18 +93,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Prometheus metrics
-REQ_COUNTER = Counter(
-    "bff_requests_total",
-    "Total HTTP requests",
-    ["method", "path", "status"],
-)
-LAT_HIST = Histogram(
-    "bff_request_latency_seconds",
-    "Request latency",
-    ["method", "path"],
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
-)
+# Prometheus metrics (initialized on startup to avoid duplicate registration)
+REQ_COUNTER = None
+LAT_HIST = None
 
 PUSH_REG: Dict[str, list[Dict[str, Any]]] = {}
 TOPICS: Dict[str, set] = {}
@@ -132,7 +123,10 @@ async def metrics_middleware(request: Request, call_next):
     if request.url.path.startswith("/metrics"):
         need = 0
     if b["tokens"] < need:
-        REQ_COUNTER.labels(request.method, request.url.path, "429").inc()
+        try:
+            getattr(app.state, "REQ_COUNTER").labels(request.method, request.url.path, "429").inc()
+        except Exception:
+            pass
         return Response(status_code=429, content="rate limited")
     b["tokens"] -= need
     app.state._rl[ip] = b
@@ -146,8 +140,11 @@ async def metrics_middleware(request: Request, call_next):
     finally:
         dur = time.perf_counter() - start
         status = str(getattr(request.state, "_status_code", getattr(locals().get("response", Response()), "status_code", 0)))
-        LAT_HIST.labels(method, path_t).observe(dur)
-        REQ_COUNTER.labels(method, path_t, status).inc()
+        try:
+            getattr(app.state, "LAT_HIST").labels(method, path_t).observe(dur)
+            getattr(app.state, "REQ_COUNTER").labels(method, path_t, status).inc()
+        except Exception:
+            pass
 
 
 @app.get("/metrics")
@@ -155,9 +152,106 @@ def metrics():
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
+"""
+Auth convenience (proxy to Payments): /auth/* endpoints
+These are defined before the dynamic path proxy to avoid shadowing.
+"""
+
+@app.post("/auth/register")
+async def bff_auth_register(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    async with httpx.AsyncClient() as client:
+        try:
+            js = await _fetch_json(client, "POST", f"{PAYMENTS_BASE_URL}/auth/register", json=payload)
+        except HTTPException as e:
+            # propagate error response
+            detail = e.detail if isinstance(e.detail, (dict, list, str)) else str(e.detail)
+            return Response(status_code=e.status_code, content=pyjson.dumps(detail), media_type="application/json")
+    return Response(content=pyjson.dumps(js), media_type="application/json")
+
+
+@app.post("/auth/login")
+async def bff_auth_login(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    async with httpx.AsyncClient() as client:
+        try:
+            js = await _fetch_json(client, "POST", f"{PAYMENTS_BASE_URL}/auth/login", json=payload)
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, (dict, list, str)) else str(e.detail)
+            return Response(status_code=e.status_code, content=pyjson.dumps(detail), media_type="application/json")
+    return Response(content=pyjson.dumps(js), media_type="application/json")
+
+
+@app.post("/auth/dev_login")
+async def bff_auth_dev_login(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    async with httpx.AsyncClient() as client:
+        try:
+            js = await _fetch_json(client, "POST", f"{PAYMENTS_BASE_URL}/auth/dev_login", json=payload)
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, (dict, list, str)) else str(e.detail)
+            return Response(status_code=e.status_code, content=pyjson.dumps(detail), media_type="application/json")
+    return Response(content=pyjson.dumps(js), media_type="application/json")
+
+
+@app.post("/auth/request_otp")
+async def bff_auth_request_otp(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    async with httpx.AsyncClient() as client:
+        try:
+            js = await _fetch_json(client, "POST", f"{PAYMENTS_BASE_URL}/auth/request_otp", json=payload)
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, (dict, list, str)) else str(e.detail)
+            return Response(status_code=e.status_code, content=pyjson.dumps(detail), media_type="application/json")
+    return Response(content=pyjson.dumps(js), media_type="application/json")
+
+
+@app.post("/auth/verify_otp")
+async def bff_auth_verify_otp(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    async with httpx.AsyncClient() as client:
+        try:
+            js = await _fetch_json(client, "POST", f"{PAYMENTS_BASE_URL}/auth/verify_otp", json=payload)
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, (dict, list, str)) else str(e.detail)
+            return Response(status_code=e.status_code, content=pyjson.dumps(detail), media_type="application/json")
+    return Response(content=pyjson.dumps(js), media_type="application/json")
+
 @app.on_event("startup")
 async def on_startup():
     global REDIS
+    # Initialize metrics once
+    if not hasattr(app.state, "REQ_COUNTER"):
+        try:
+            app.state.REQ_COUNTER = Counter(
+                "bff_requests_total",
+                "Total HTTP requests",
+                ["method", "path", "status"],
+            )
+            app.state.LAT_HIST = Histogram(
+                "bff_request_latency_seconds",
+                "Request latency",
+                ["method", "path"],
+                buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
+            )
+        except Exception:
+            # ignore duplicate registration in edge cases
+            pass
     if REDIS_URL and redis is not None:
         try:
             REDIS = redis.from_url(REDIS_URL, decode_responses=True)
@@ -822,7 +916,14 @@ async def stays_favorites(authorization: str | None = Header(default=None), requ
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
     async with httpx.AsyncClient() as client:
-        fav = await _fetch_json(client, "GET", f"{DEFAULT_BASES['stays']}/properties/favorites", headers=headers)
+        try:
+            fav = await _fetch_json(client, "GET", f"{DEFAULT_BASES['stays']}/properties/favorites", headers=headers)
+        except HTTPException as e:
+            # In dev, degrade to empty list to not block basic flows
+            if APP_ENV != "prod":
+                fav = {"favorites": []}
+            else:
+                raise
     raw = pyjson.dumps(fav, separators=(",", ":")).encode("utf-8")
     etag = _etag_for_bytes(raw)
     inm = request.headers.get("if-none-match") if request else None
@@ -832,34 +933,7 @@ async def stays_favorites(authorization: str | None = Header(default=None), requ
     return Response(content=raw, media_type="application/json", headers=headers)
 
 
-@app.api_route("/{service}/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-async def proxy_service(service: str, full_path: str, request: Request) -> Any:
-    base = DEFAULT_BASES.get(service)
-    if not base:
-        raise HTTPException(status_code=404, detail="unknown service")
-
-    # Build upstream URL with original query string
-    qs = request.url.query
-    url = f"{base}/{full_path}"
-    if qs:
-        url = f"{url}?{qs}"
-
-    # Forward selected headers (auth, content-type, idempotency, custom x-*)
-    fwd_headers: Dict[str, str] = {}
-    for k, v in request.headers.items():
-        lk = k.lower()
-        if lk in ("authorization", "content-type", "accept", "idempotency-key") or lk.startswith("x-"):
-            fwd_headers[k] = v
-
-    body = await request.body()
-    method = request.method.upper()
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.request(method, url, headers=fwd_headers, content=body, timeout=10.0)
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=str(e))
-
-    return app.response_class(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", None))
+## proxy_service moved to end of file to avoid route shadowing
 
 
 @app.websocket("/{service}/ws")
@@ -914,11 +988,42 @@ async def ws_proxy(service: str, websocket: WebSocket):
             pass
 
 
+@app.api_route("/{service}/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def proxy_service(service: str, full_path: str, request: Request) -> Any:
+    base = DEFAULT_BASES.get(service)
+    if not base:
+        raise HTTPException(status_code=404, detail="unknown service")
+
+    # Build upstream URL with original query string
+    qs = request.url.query
+    url = f"{base}/{full_path}"
+    if qs:
+        url = f"{url}?{qs}"
+
+    # Forward selected headers (auth, content-type, idempotency, custom x-*)
+    fwd_headers: Dict[str, str] = {}
+    for k, v in request.headers.items():
+        lk = k.lower()
+        if lk in ("authorization", "content-type", "accept", "idempotency-key") or lk.startswith("x-"):
+            fwd_headers[k] = v
+
+    body = await request.body()
+    method = request.method.upper()
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.request(method, url, headers=fwd_headers, content=body, timeout=10.0)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
+    return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", None))
+
+
 def main() -> None:
     import uvicorn
-
-    uvicorn.run("apps.bff.app.main:app", host=APP_HOST, port=APP_PORT, reload=True)
+    RELOAD = os.getenv("APP_RELOAD", "false").lower() == "true"
+    uvicorn.run("apps.bff.app.main:app", host=APP_HOST, port=APP_PORT, reload=RELOAD)
 
 
 if __name__ == "__main__":
     main()
+## Auth convenience block moved above dynamic proxy

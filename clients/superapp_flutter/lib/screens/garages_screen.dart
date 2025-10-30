@@ -7,7 +7,6 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_ui/glass.dart';
 import '../services.dart';
 import 'package:shared_ui/message_host.dart';
-import 'package:shared_ui/toast.dart';
 
 class GaragesScreen extends StatefulWidget {
   const GaragesScreen({super.key});
@@ -74,7 +73,6 @@ class _GaragesScreenState extends State<GaragesScreen> {
     }
   }
 
-  void _toast(String msg) { if (!mounted) return; showToast(context, msg); }
 
   @override
   void initState() {

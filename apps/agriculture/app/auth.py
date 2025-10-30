@@ -47,6 +47,15 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
     user = db.get(User, user_id)
     if not user:
+        try:
+            phone = (payload.get("phone") or "").strip()
+            name = (payload.get("name") or None)
+            if phone:
+                user = User(id=user_id, phone=phone, name=name)
+                db.add(user)
+                db.flush()
+        except Exception:
+            pass
+    if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
-

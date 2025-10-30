@@ -69,6 +69,8 @@ export DART_DEFINES=$(jq -r 'to_entries|map("\(.key)=\(.value)")|map(@base64)|jo
 Notes
 - Prefer service-specific URLs (`*_BASE_URL`) for production. `SUPERAPP_BASE_HOST` is mainly for local dev.
 - With BFF single‑base, prefer `SUPERAPP_API_BASE` instead.
+- Legacy module cleanup: external module embeddings (`chat_flutter`, `taxi_flutter`) were removed. The Super‑App now uses built‑in screens
+  (Inbox/WS for Chat, TaxiScreen for Taxi) and talks to services directly via the shared HTTP client and the BFF.
 - iOS requires HTTPS unless ATS exceptions are configured in `ios/Runner/Info.plist`.
 - Deep‑links: The app registers `superapp://` (iOS+Android). Beispiele:
   - `superapp://feature/payments` öffnet die Wallet
@@ -88,7 +90,9 @@ Notes
 
 Services & Auth
 - Default base URLs point to localhost and can be adjusted in `lib/services.dart`.
-- OTP login is per service; tokens are stored per service in SharedPreferences.
+- Unified Login (SSO): use the Login/Registration screen in the Super‑App. It registers/logins against Payments and propagates the RS256 JWT to all services.
+  - Backends accept the token via JWKS: set `JWT_JWKS_URL=http://<payments-host>/.well-known/jwks.json` on each service.
+  - In this repo, Chat/Commerce/Stays docker‑compose files already set `JWT_JWKS_URL` to the local Payments API for dev.
 - Splash/silent login: on startup, an existing Payments token is validated and, if valid, propagated to all services (single‑login UX).
 
 Privacy & Offline

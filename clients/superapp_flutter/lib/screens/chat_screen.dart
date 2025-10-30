@@ -4,7 +4,6 @@ import 'package:http/http.dart' as http;
 import '../services.dart';
 import 'ai_gateway_screen.dart';
 import 'package:shared_ui/message_host.dart';
-import 'package:shared_ui/toast.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -20,7 +19,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Uri _chatUri(String path, {Map<String, String>? query}) =>
       ServiceConfig.endpoint('chat', path, query: query);
 
-  void _toast(String m) { showToast(context, m); }
 
   Future<void> _healthCheck() async {
     setState(() => _loading = true);

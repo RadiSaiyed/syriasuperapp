@@ -8,6 +8,12 @@ Endpoints
 - GET `/health` — liveness + env info
 - GET `/v1/features` — feature manifest for the client grid (ETag + Cache‑Control)
 - GET `/v1/me` — aggregated profile snapshot (Payments wallet + recent tx, KYC, Merchant; Chat conversation summary)
+- Auth convenience (proxied to Payments):
+  - POST `/auth/register` — create account (username/password/phone)
+  - POST `/auth/login` — login with username/password
+  - POST `/auth/dev_login` — dev-only shortcut
+  - POST `/auth/request_otp` — request OTP for phone
+  - POST `/auth/verify_otp` — verify OTP (returns RS256 JWT)
 - Path proxy `/<service>/*` — HTTP proxy to upstreams (payments, taxi, bus, commerce, utilities, ...)
 - WebSocket proxy `/{service}/ws` — WS tunnel to upstream `/ws` (e.g. Chat). Use `wss://api.<domain>/<service>/ws?token=...`.
 - Convenience endpoints with ETag/304:
@@ -19,6 +25,7 @@ Endpoints
   - GET `/v1/stays/properties/{property_id}`
   - GET `/v1/stays/reservations`
   - GET `/v1/stays/favorites`
+  - Dev (proxied): `POST /stays/dev/seed`, `POST /chat/dev/seed` (available when upstream services run in `ENV=dev`)
 - Push & Topics (dev‑friendly, optional Redis):
   - POST `/v1/push/register` — register device push token `{token, platform, device_id}`
   - GET  `/v1/push/dev/list` — list my registered devices (dev)

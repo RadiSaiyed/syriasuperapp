@@ -21,10 +21,6 @@ dependencies:
   intl: ^0.20.2
   shared_ui:
     path: ../shared_ui
-  taxi_flutter:
-    path: ../taxi_flutter
-  chat_flutter:
-    path: ../chat_flutter
   shared_core:
     path: ../shared_core
   share_plus: ^10.1.4

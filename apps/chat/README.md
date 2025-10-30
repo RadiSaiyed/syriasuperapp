@@ -10,6 +10,10 @@ Quick start
 2) Start Postgres and Redis: `docker compose up -d db redis`
 3) Run API: `docker compose up --build api`
 
+Dev endpoints
+- When `ENV=dev`, a helper endpoint exists to stabilize E2E flows:
+  - `POST /dev/seed` — ensures the authenticated user exists (no‑op otherwise). Useful when first hitting inbox via the BFF.
+
 Defaults
 - Port: 8091
 - DB (in Docker): `postgresql+psycopg2://postgres:postgres@db:5432/chat`

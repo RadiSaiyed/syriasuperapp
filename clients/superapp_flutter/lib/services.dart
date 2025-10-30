@@ -174,7 +174,7 @@ Future<void> registerUser({
     'phone': phone,
   };
   if (name != null && name.isNotEmpty) payload['name'] = name;
-  final resp = await _clientFor('payments').postJson(
+  final resp = await _clientFor('superapp').postJson(
     '/auth/register',
     body: payload,
     options: const RequestOptions(expectValidationErrors: true, idempotent: true),
@@ -195,7 +195,7 @@ Future<void> passwordLogin({
   required String password,
   MultiTokenStore? store,
 }) async {
-  final resp = await _clientFor('payments').postJson(
+  final resp = await _clientFor('superapp').postJson(
     '/auth/login',
     body: {'username': username, 'password': password},
     options: const RequestOptions(expectValidationErrors: true, idempotent: true),
@@ -214,7 +214,7 @@ Future<void> passwordLogin({
 Future<DevAuthResult> devLogin({
   required String username,
   required String password,
-  String service = 'payments',
+  String service = 'superapp',
   MultiTokenStore? store,
 }) async {
   final response = await _clientFor(service).postJson(
@@ -234,7 +234,8 @@ Future<DevAuthResult> devLogin({
 }
 
 Future<void> requestOtp(String service, String phone) async {
-  await _clientFor(service).postJson(
+  // Route via BFF so login is unified
+  await _clientFor('superapp').postJson(
     '/auth/request_otp',
     body: {'phone': phone},
     options: const RequestOptions(expectValidationErrors: true, idempotent: true),
@@ -246,14 +247,18 @@ Future<void> verifyOtp(String service, String phone, String otp,
   final payload = <String, dynamic>{'phone': phone, 'otp': otp};
   if (name != null) payload['name'] = name;
   if (role != null) payload['role'] = role;
-  final response = await _clientFor(service).postJson(
+  // Route via BFF; token issuer is Payments
+  final response = await _clientFor('superapp').postJson(
     '/auth/verify_otp',
     body: payload,
     options: const RequestOptions(expectValidationErrors: true, idempotent: true),
   );
   final token = response['access_token'] as String?;
   if (token == null) throw Exception('No token');
-  await (store ?? MultiTokenStore()).set(service, token);
+  final s = store ?? MultiTokenStore();
+  // Store under payments and propagate to all services for SSO
+  await s.set('payments', token);
+  await s.setAll(token);
 }
 
 Future<String?> getTokenFor(String service, {MultiTokenStore? store}) async {

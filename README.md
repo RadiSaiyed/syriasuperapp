@@ -45,12 +45,13 @@ Operator UIs
 - Each operator service exposes `/ui` for quick manual tests (paste JWT and use handy actions). See operators/README.md for details per app.
 - Taxi webhook simulation: open `operators/taxi_partners` → `/ui` and use “Simulate Webhooks → Taxi” to send signed ride status and driver location webhooks to Taxi API (default base `http://localhost:8081`, overridable via UI or `TAXI_BASE`).
 
- Unified API (BFF)
+Unified API (BFF)
 - BFF at `apps/bff` is the single entrypoint for the Super‑App.
   - `GET /health`, `GET /v1/features` (ETag), `GET /v1/me` (aggregated: Payments wallet/KYC/Merchant + Chat summary)
   - Path proxy `/<service>/*` and WS proxy `/{service}/ws` unify access to all verticals
   - Convenience endpoints with ETag/304 for Commerce and Stays (shops/products/orders; properties/reservations/favorites)
   - Push: device register, topics subscribe/list, dev send/broadcast by topic (see `apps/bff/README.md`)
+  - Dev seeds (proxied): `POST /stays/dev/seed`, `POST /chat/dev/seed` (dev only) to stabilize local data
 - Local: `make bff-up` (or `ENV=dev APP_PORT=8070 python -m apps.bff.app.main`)
 - Super‑App (single base):
   - `--dart-define SUPERAPP_API_BASE=http://localhost:8070` routes all requests via BFF

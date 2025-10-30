@@ -8,7 +8,6 @@ import 'package:shared_ui/shared_ui.dart';
 import 'package:shared_ui/message_host.dart';
 import 'ui/feedback.dart';
 import 'screens/payments_screen.dart';
-import 'apps/taxi_module.dart';
 // Driver UI is now a standalone app (clients/taxi_driver_flutter)
 // import 'screens/taxi_driver_screen.dart';
 import 'screens/food_screen.dart';
@@ -20,7 +19,8 @@ import 'screens/freight_screen.dart';
 import 'screens/carmarket_screen.dart';
 import 'screens/stays_screen.dart';
 import 'screens/doctors_screen.dart';
-import 'apps/chat_module.dart';
+import 'screens/taxi_screen.dart';
+// Chat embedding via Inbox/Chat screens
 import 'screens/jobs_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart';
@@ -569,14 +569,7 @@ class _HomeScreenState extends State<HomeScreen> {
             if (!ok || !context.mounted) return;
             Navigator.push(
               context,
-              MaterialPageRoute(
-                builder: (_) => TaxiModule.build(
-                  onRequestLogin: () {
-                    if (!mounted) return;
-                    setState(() => _tab = 2); // switch to Profile tab
-                  },
-                ),
-              ),
+              MaterialPageRoute(builder: (_) => const TaxiScreen()),
             );
           }),
       const InboxScreen(),
@@ -650,7 +643,7 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Row(children: [
                 Expanded(child: HapticActionButton(icon: Icons.local_taxi, label: const Text('Ride Now'), onPressed: () {
                   AppHaptics.impact();
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => TaxiModule.build()));
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const TaxiScreen()));
                 })),
                 const SizedBox(width: 8),
                 Expanded(child: HapticActionButton(icon: Icons.qr_code_scanner, label: const Text('Scan & Pay'), onPressed: () {
@@ -723,25 +716,6 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ValueListenableBuilder<int>(
                 valueListenable: PushHistoryStore.unread,
                 builder: (context, unread, _) {
-                  Widget _inboxIcon() {
-                    final base = const Icon(Icons.notifications_none);
-                    if (unread <= 0) return base;
-                    return Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        base,
-                        Positioned(
-                          right: -2,
-                          top: -2,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                            decoration: BoxDecoration(color: Colors.redAccent, borderRadius: BorderRadius.circular(10)),
-                            child: Text(unread > 99 ? '99+' : '$unread', style: const TextStyle(color: Colors.white, fontSize: 9)),
-                          ),
-                        ),
-                      ],
-                    );
-                  }
                   return NavigationBar(
                     selectedIndex: _tab,
                     destinations: [
@@ -879,7 +853,7 @@ class _AppsGridState extends State<_AppsGrid> {
         title: 'Chat',
         accent: c('Chat'),
         onTap: () => Navigator.push(
-            context, MaterialPageRoute(builder: (_) => ChatModule.build()))));
+            context, MaterialPageRoute(builder: (_) => const InboxScreen()))));
 
     // Page 2 (requested order)
     maybe('carmarket', _AppCard(

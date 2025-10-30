@@ -16,6 +16,8 @@ services:
       dockerfile: apps/carmarket/Dockerfile
     env_file:
       - .env
+    environment:
+      JWT_JWKS_URL: ${JWT_JWKS_URL:-http://host.docker.internal:8080/.well-known/jwks.json}
     ports:
       - "8086:8086"
     networks:

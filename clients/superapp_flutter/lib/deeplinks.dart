@@ -4,29 +4,30 @@ import 'package:flutter/material.dart';
 import 'package:uni_links/uni_links.dart';
 
 import 'screens/payments_screen.dart';
-import 'apps/taxi_module.dart';
+import 'screens/taxi_screen.dart';
 import 'screens/food_screen.dart';
 import 'screens/flights_screen.dart';
 import 'screens/bus_screen.dart';
-import 'apps/chat_module.dart';
+import 'screens/inbox_screen.dart';
 import 'screens/carmarket_screen.dart';
 import 'screens/freight_screen.dart';
 import 'screens/carrental_screen.dart';
 import 'screens/stays_screen.dart';
+import 'screens/stays_listing_screen.dart';
+import 'screens/stays_reservation_detail_screen.dart';
 import 'screens/realestate_screen.dart';
 import 'screens/jobs_screen.dart';
 import 'screens/utilities_screen.dart';
 import 'screens/doctors_screen.dart';
 import 'screens/commerce_screen.dart';
+import 'screens/commerce_order_screen.dart';
 import 'screens/parking_screen.dart';
 import 'screens/garages_screen.dart';
 import 'screens/agriculture_screen.dart';
 import 'screens/livestock_screen.dart';
 import 'screens/ai_gateway_screen.dart';
 import 'screens/search_screen.dart';
-import 'package:taxi_flutter/api.dart' as taxi_api;
 import 'services.dart';
-import 'package:shared_core/shared_core.dart';
 
 class DeepLinks {
   static StreamSubscription? _sub;
@@ -88,9 +89,9 @@ class DeepLinks {
         if (pickup != null && drop != null) {
           // Fire-and-open: create/quote ride, then open module
           _requestOrQuoteTaxi(context, pickup, drop, mode);
-          page = TaxiModule.build();
+          page = const TaxiScreen();
         } else {
-          page = TaxiModule.build();
+          page = const TaxiScreen();
         }
         break;
       case 'food':
@@ -103,7 +104,7 @@ class DeepLinks {
         page = const BusScreen();
         break;
       case 'chat':
-        page = ChatModule.build();
+        page = const InboxScreen();
         break;
       case 'carmarket':
         page = const CarMarketScreen();
@@ -193,26 +194,20 @@ class DeepLinks {
       }
       final p = _p(pickup);
       final d = _p(drop);
-      final base = ServiceConfig.baseUrl('taxi');
-      final token = await getTokenFor('taxi');
-      if (token == null || token.isEmpty) return;
-      final api = taxi_api.ApiClient(baseUrl: base, tokenStore: _DeepLinkTaxiTokenStore(token));
+      // Use HTTP via our shared client (Single‑Base aware). Requires login.
+      final t = await getTokenFor('taxi');
+      if (t == null || t.isEmpty) return;
+      final body = {
+        'pickup_lat': p[0],
+        'pickup_lon': p[1],
+        'dropoff_lat': d[0],
+        'dropoff_lon': d[1],
+      };
       if (action == 'quote') {
-        await api.quoteRide(pickupLat: p[0], pickupLon: p[1], dropLat: d[0], dropLon: d[1]);
+        await servicePostJson('taxi', '/rides/quote', body: body);
       } else {
-        await api.requestRide(pickupLat: p[0], pickupLon: p[1], dropLat: d[0], dropLon: d[1]);
+        await servicePostJson('taxi', '/rides/request', body: body);
       }
     } catch (_) {}
   }
-}
-
-class _DeepLinkTaxiTokenStore extends taxi_api.TokenStore {
-  final String token;
-  _DeepLinkTaxiTokenStore(this.token);
-  @override
-  Future<String?> getToken() async => token;
-  @override
-  Future<void> clear() async {}
-  @override
-  Future<void> setToken(String token) async {}
 }

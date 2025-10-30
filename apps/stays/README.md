@@ -117,3 +117,7 @@ Demo data (seed)
   - `make stays-seed` (uses DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5441/stays by default)
   - Or: `DB_URL=... python apps/stays/seed_demo.py`
 - Creates 3 demo properties (Damascus/Aleppo/Latakia) with units, images, amenities and prices for the next 14 days.
+
+Dev endpoints
+- When `ENV=dev`, a lightweight seeding endpoint is available from the API directly:
+  - `POST /dev/seed` — ensures a demo host and a few properties exist (idempotent-ish). Useful for quick E2E tests via the BFF.

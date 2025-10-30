@@ -19,6 +19,7 @@ services:
     environment:
       DB_URL: postgresql+psycopg2://postgres:postgres@host.docker.internal:5443/food
       REDIS_URL: redis://host.docker.internal:6389/0
+      JWT_JWKS_URL: ${JWT_JWKS_URL:-http://host.docker.internal:8080/.well-known/jwks.json}
     ports:
       - "8090:8090"
     networks:
