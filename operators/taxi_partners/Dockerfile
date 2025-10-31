@@ -12,6 +12,7 @@ COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 COPY apps/taxi/app /app/app
 COPY apps/taxi/alembic.ini /app/
 COPY apps/taxi/alembic /app/alembic
+COPY operators/_shared /app/operators/_shared
 COPY operators/taxi_partners /app/operators/taxi_partners
 
 EXPOSE 8108

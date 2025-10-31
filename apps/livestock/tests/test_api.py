@@ -77,7 +77,7 @@ def test_favorites_and_auctions_flow():
     # create auction for the animal if still available; otherwise pick another
     # attempt auction creation (may fail if already sold)
     import datetime as dt
-    ends = (dt.datetime.utcnow() + dt.timedelta(minutes=5)).isoformat() + "Z"
+    ends = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
     ra = client.post(
         "/seller/auctions",
         headers=hs,

@@ -39,7 +39,7 @@ def test_jwt_rejects_wrong_issuer_and_audience():
 def test_jwt_expired_token_is_rejected():
     client, secret = _client_with_jwt_flags(validate_iss=False, validate_aud=False)
     import datetime as dt
-    now = dt.datetime.utcnow()
+    now = dt.datetime.now(dt.timezone.utc)
     payload = {"sub": "00000000-0000-0000-0000-000000000000", "exp": int((now - dt.timedelta(seconds=1)).timestamp())}
     token = jwt.encode(payload, secret, algorithm="HS256")
     r = client.get("/wallet", headers={"Authorization": f"Bearer {token}"})

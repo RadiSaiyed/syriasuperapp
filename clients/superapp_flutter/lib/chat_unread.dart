@@ -9,6 +9,9 @@ class ChatUnreadStore {
 
   static Future<void> refresh() async {
     try {
+      // Do not poll when not logged in (avoid unauthorized /v1/me calls at startup)
+      final hasPayments = await hasTokenFor('payments');
+      if (!hasPayments) return;
       final js = await serviceGetJson('superapp', '/v1/me', options: const RequestOptions(idempotent: true));
       final svc = (js['services'] as Map?)?.cast<String, dynamic>();
       final chat = (svc?['chat'] as Map?)?.cast<String, dynamic>();

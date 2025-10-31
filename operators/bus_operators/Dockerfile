@@ -14,9 +14,9 @@ COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 
 # Copy Bus domain code and this operator entrypoint
 COPY apps/bus/app /app/app
+COPY operators/_shared /app/operators/_shared
 COPY operators/bus_operators /app/operators/bus_operators
 
 EXPOSE 8085
 
 CMD ["uvicorn", "operators.bus_operators.main:app", "--host", "0.0.0.0", "--port", "8085"]
-

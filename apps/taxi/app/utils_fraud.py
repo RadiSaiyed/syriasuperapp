@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.orm import Session
 
@@ -28,13 +28,13 @@ def enforce_rider_velocity(db: Session, user_id: str) -> None:
         window_secs, max_reqs = 60, 6
     if max_reqs <= 0:
         return
-    since = datetime.utcnow() - timedelta(seconds=window_secs)
+    since = datetime.now(timezone.utc) - timedelta(seconds=window_secs)
     cnt = db.query(Ride).filter(Ride.rider_user_id == user_id).filter(Ride.created_at >= since).count()
     if cnt >= max_reqs:
         record_fraud_event(db, user_id=user_id, type="rider.velocity_block", data={"count": cnt, "window_secs": window_secs})
         # Optional auto-suspension
         if getattr(settings, "FRAUD_AUTOSUSPEND_ON_VELOCITY", False):
-            until = datetime.utcnow() + timedelta(minutes=max(1, int(getattr(settings, "FRAUD_AUTOSUSPEND_MINUTES", 10))))
+            until = datetime.now(timezone.utc) + timedelta(minutes=max(1, int(getattr(settings, "FRAUD_AUTOSUSPEND_MINUTES", 10))))
             susp = Suspension(user_id=user_id, reason="velocity", until=until, active=True)
             db.add(susp); db.flush()
         from fastapi import HTTPException, status
@@ -52,7 +52,7 @@ def require_driver_location_fresh_and_near(db: Session, driver: Driver, *, targe
         from fastapi import HTTPException, status
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="driver_location_missing")
     # Freshness
-    age = (datetime.utcnow() - loc.updated_at).total_seconds()
+    age = (datetime.now(timezone.utc) - loc.updated_at).total_seconds()
     if age > max_age_secs:
         record_fraud_event(db, driver_id=str(driver.id), type=f"driver.loc_stale.{stage}", data={"age_secs": age})
         from fastapi import HTTPException, status
@@ -66,16 +66,16 @@ def require_driver_location_fresh_and_near(db: Session, driver: Driver, *, targe
 
 
 def is_suspended_user(db: Session, user_id: str) -> bool:
-    from datetime import datetime
-    now = datetime.utcnow()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
     q = db.query(Suspension).filter(Suspension.user_id == user_id, Suspension.active == True)  # noqa: E712
     rows = [s for s in q.all() if (s.until is None or s.until >= now)]
     return len(rows) > 0
 
 
 def is_suspended_driver(db: Session, driver_id: str) -> bool:
-    from datetime import datetime
-    now = datetime.utcnow()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
     q = db.query(Suspension).filter(Suspension.driver_id == driver_id, Suspension.active == True)  # noqa: E712
     rows = [s for s in q.all() if (s.until is None or s.until >= now)]
     return len(rows) > 0

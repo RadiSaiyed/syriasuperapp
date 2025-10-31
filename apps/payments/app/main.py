@@ -2,6 +2,14 @@ import os
 import asyncio
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+try:
+    from starlette.middleware.forwarded import ForwardedMiddleware as _ForwardedOrProxy
+except Exception:
+    try:
+        from starlette.middleware.proxy_headers import ProxyHeadersMiddleware as _ForwardedOrProxy
+    except Exception:
+        _ForwardedOrProxy = None  # type: ignore
 from sqlalchemy import text
 
 from .config import settings
@@ -32,6 +40,33 @@ from .middleware_rate_limit_redis import RedisRateLimiter
 from .middleware_request_id import RequestIDMiddleware
 from .utils.security_headers import SecurityHeadersMiddleware
 
+# Optional OpenTelemetry tracing (enabled via env OTEL_EXPORTER_OTLP_ENDPOINT)
+def _init_tracing(app: FastAPI) -> None:
+    try:
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip() or "http://localhost:4318"
+        service_name = os.getenv("OTEL_SERVICE_NAME", "payments")
+        from opentelemetry import trace
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+        resource = Resource.create({
+            "service.name": service_name,
+            "deployment.environment": settings.ENV,
+        })
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces")
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        FastAPIInstrumentor.instrument_app(app)
+        HTTPXClientInstrumentor().instrument()
+    except Exception:
+        # Tracing is optional; fail-open
+        pass
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Payments API", version="0.1.0", docs_url="/docs")
@@ -47,23 +82,36 @@ def create_app() -> FastAPI:
 
     # Request ID + JSON request log
     app.add_middleware(RequestIDMiddleware)
+    # Trusted hosts + forwarded headers
+    allowed_hosts = getattr(settings, "ALLOWED_HOSTS", None) or (["*"] if settings.ENV != "prod" else ["api.example.com"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    proxy_trusted = getattr(settings, "PROXY_TRUSTED_IPS", None)
+    if proxy_trusted and _ForwardedOrProxy:
+        try:
+            app.add_middleware(_ForwardedOrProxy, trusted_hosts=proxy_trusted)
+        except Exception:
+            pass
     # Secure default HTTP headers
     app.add_middleware(SecurityHeadersMiddleware)
 
     # Rate limiting
-    if settings.RATE_LIMIT_BACKEND.lower() == "redis":
+    backend = (getattr(settings, "RATE_LIMIT_BACKEND", "") or "").lower()
+    common_excludes = ["/health", "/health/deps", "/metrics", "/info", "/openapi.yaml", "/openapi.json", "/ui", "/docs"]
+    if backend == "redis":
         app.add_middleware(
             RedisRateLimiter,
             redis_url=settings.REDIS_URL,
             limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
             auth_boost=settings.RATE_LIMIT_AUTH_BOOST,
             prefix=settings.RATE_LIMIT_REDIS_PREFIX,
+            exclude_paths=common_excludes,
         )
     else:
         app.add_middleware(
             SlidingWindowLimiter,
             limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
             auth_boost=settings.RATE_LIMIT_AUTH_BOOST,
+            exclude_paths=common_excludes,
         )
 
     if settings.AUTO_CREATE_SCHEMA:
@@ -72,7 +120,7 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     # Metrics
@@ -94,7 +142,22 @@ def create_app() -> FastAPI:
             # Prefer templated route if available to limit cardinality
             route = getattr(request.scope.get("route"), "path", None) or request.url.path
             REQUESTS.labels(request.method, route, str(response.status_code)).inc()
-            REQ_DURATION.labels(request.method, route).observe(duration)
+            # Attach exemplar with trace_id if available
+            exemplar = None
+            try:
+                from opentelemetry import trace as _trace  # type: ignore
+                ctx = _trace.get_current_span().get_span_context()
+                if getattr(ctx, "trace_id", 0):
+                    exemplar = {"trace_id": f"{ctx.trace_id:032x}"}
+            except Exception:
+                exemplar = None
+            if exemplar:
+                try:
+                    REQ_DURATION.labels(request.method, route).observe(duration, exemplar=exemplar)  # type: ignore[call-arg]
+                except Exception:
+                    REQ_DURATION.labels(request.method, route).observe(duration)
+            else:
+                REQ_DURATION.labels(request.method, route).observe(duration)
         except Exception:
             pass
         return response
@@ -102,6 +165,9 @@ def create_app() -> FastAPI:
     @app.get("/metrics")
     def metrics():
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # Initialize tracing late to ensure app exists
+    _init_tracing(app)
 
     app.include_router(auth_router.router)
     app.include_router(wallet_router.router)

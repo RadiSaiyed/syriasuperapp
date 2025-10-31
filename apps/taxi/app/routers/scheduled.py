@@ -97,7 +97,7 @@ def dispatch_scheduled(window_minutes: int = 10, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
     if window_minutes <= 0:
         window_minutes = 10
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     cutoff = now + timedelta(minutes=window_minutes)
     due = db.query(ScheduledRide).filter(ScheduledRide.scheduled_for <= cutoff).all()
     dispatched = 0

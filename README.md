@@ -129,10 +129,12 @@ Observability
   - `ops/observability/grafana/dashboards/payments.json`
   - `ops/observability/grafana/dashboards/superapp_overview.json`
   - `ops/observability/grafana/dashboards/bff.json`
-- Quick start (Prometheus + Grafana):
+- Quick start (Prometheus + Grafana + Tempo):
   - `docker compose -f ops/observability/docker-compose.yml up -d`
   - Prometheus: http://localhost:9090 (scrapes local services)
   - Grafana: http://localhost:3000 (anonymous viewer)
+  - Tempo (OTLP): http://localhost:4318 (HTTP OTLP), 4317 (gRPC). Grafana is preprovisioned with a Tempo datasource.
+  - To export traces set in services: `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` and optionally `OTEL_SERVICE_NAME`.
  - Alertmanager: http://localhost:9093 (webhook preconfigured to Ops‑Admin)
  - Alerts: rules in `ops/observability/prometheus/alerts.yml` (ServiceDown, HighErrorRate, Payments Webhook Retries)
   - Slack/Email: Receivers `slack`/`email` are defined in `ops/observability/alertmanager/alertmanager.yml`.

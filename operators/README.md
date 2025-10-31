@@ -52,6 +52,8 @@ Common endpoints
 - `GET /health` — liveness
 - `GET /health/deps` — dependencies readiness (DB, Redis)
 - `GET /metrics` — Prometheus metrics
+- Security headers are enabled (nosniff, DENY, no‑referrer, strict Permissions‑Policy). `Cache-Control: no-store` for write operations.
+- Optional OpenTelemetry tracing: set `OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318` (or your collector) and (optional) `OTEL_SERVICE_NAME` to export traces.
 - `GET /me` — role-aware summary for the current operator user (counts, quick profile)
   - Returns 403 if caller lacks the required role/membership for that operator app
 - `GET /info` — static service metadata (name, version, env)
@@ -80,6 +82,7 @@ UI helpers (highlights)
   - Loads post/list; Bids per Load: list, accept/reject.
 - Jobs Employer `/ui`
   - Company create/get, Jobs create/list/status, Applications list/status; update Tags via PATCH.
+  - CSV export for Jobs (planned), bulk status updates, tagging presets.
 
 Taxi Webhook Simulation (Taxi Partners)
 

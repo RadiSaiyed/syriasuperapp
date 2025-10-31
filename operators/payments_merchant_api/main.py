@@ -1,15 +1,24 @@
 from fastapi import FastAPI, Response, Request, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+try:
+    from starlette.middleware.forwarded import ForwardedMiddleware as _ForwardedOrProxy
+except Exception:
+    try:
+        from starlette.middleware.proxy_headers import ProxyHeadersMiddleware as _ForwardedOrProxy
+    except Exception:
+        _ForwardedOrProxy = None  # type: ignore
 from sqlalchemy import text
 
 # Import Payments domain via PYTHONPATH=apps/payments
 from app.config import settings
 from app.database import engine
 from app.models import Base
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import PlainTextResponse
+from operators._shared.common import SecurityHeadersMiddleware, init_tracing
 import json
 import os
 try:
@@ -51,16 +60,26 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["health"])
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
+    LAT = Histogram(
+        "http_request_duration_seconds",
+        "Request duration",
+        ["method", "path"],
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+    )
 
     @app.middleware("http")
     async def _metrics_mw(request, call_next):
-        response = await call_next(request)
+        route = request.scope.get("route")
+        path_tmpl = getattr(route, "path", request.url.path)
+        method = request.method
+        with LAT.labels(method, path_tmpl).time():
+            response = await call_next(request)
         try:
-            REQ.labels(request.method, request.url.path, str(response.status_code)).inc()
+            REQ.labels(method, path_tmpl, str(response.status_code)).inc()
         except Exception:
             pass
         return response
@@ -75,6 +94,16 @@ def create_app() -> FastAPI:
 
     app.include_router(merchant_api_router.router)
     app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.add_middleware(SecurityHeadersMiddleware)
+    # Trusted hosts + forwarded headers
+    allowed_hosts = getattr(settings, "ALLOWED_HOSTS", None) or (["*"] if settings.ENV != "prod" else ["api.example.com"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    proxy_trusted = getattr(settings, "PROXY_TRUSTED_IPS", None)
+    if proxy_trusted and _ForwardedOrProxy:
+        try:
+            app.add_middleware(_ForwardedOrProxy, trusted_hosts=proxy_trusted)
+        except Exception:
+            pass
 
     # OpenAPI: add global HTTP Bearer scheme (merchant HMAC; still display bearer for admin/protected endpoints if any)
     def custom_openapi():
@@ -95,10 +124,14 @@ def create_app() -> FastAPI:
         security_schemes["HTTPBearer"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
         openapi_schema["security"] = [{"HTTPBearer": []}]
         openapi_schema["tags"] = tags_meta
-        no_auth_paths = ["/health", "/openapi.yaml", "/info"]
-        for p in no_auth_paths:
-            if p in openapi_schema.get("paths", {}):
-                for op in openapi_schema["paths"][p].values():
+        no_auth_paths = {
+            "/", "/docs", "/openapi.json", "/openapi.yaml",
+            "/metrics", "/ui", "/health", "/health/deps", "/info",
+            "/auth/dev_login_operator",
+        }
+        for p, ops in openapi_schema.get("paths", {}).items():
+            if p in no_auth_paths:
+                for op in ops.values():
                     op["security"] = []
         app.openapi_schema = openapi_schema
         return app.openapi_schema
@@ -166,7 +199,17 @@ async function health(){ const r=await fetch('/health'); out.textContent=await r
 const out=document.getElementById('out');
 </script>
 """
-        return PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        import secrets
+        nonce = secrets.token_urlsafe(16)
+        html = html.replace("<script>", f"<script nonce=\"{nonce}\">", 1)
+        resp = PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        try:
+            resp.headers["Content-Security-Policy"] = f"script-src 'self' 'nonce-{nonce}'"
+        except Exception:
+            pass
+        return resp
+    # Initialize tracing if configured
+    init_tracing(app, default_name="payments_merchant_api")
     return app
 
 

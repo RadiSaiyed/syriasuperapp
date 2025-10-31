@@ -72,6 +72,7 @@ Notes
 - Legacy module cleanup: external module embeddings (`chat_flutter`, `taxi_flutter`) were removed. The Super‑App now uses built‑in screens
   (Inbox/WS for Chat, TaxiScreen for Taxi) and talks to services directly via the shared HTTP client and the BFF.
 - iOS requires HTTPS unless ATS exceptions are configured in `ios/Runner/Info.plist`.
+- Localization/RTL: The app ships with English + Arabic locales (RTL). Set from device or Settings; Material widgets flip layout automatically.
 - Deep‑links: The app registers `superapp://` (iOS+Android). Beispiele:
   - `superapp://feature/payments` öffnet die Wallet
   - `superapp://feature/taxi` öffnet Taxi
@@ -123,6 +124,28 @@ Push & Topics (optional)
   - Android: add `android/app/google-services.json`; apply Google Services Gradle plugins (already referenced by the template).
 - The BFF needs `FCM_SERVER_KEY` for real sends; without it, dev sends/broadcast simulate delivery.
 - Topics: Profile → Push Topics to subscribe/unsubscribe; Ops‑Admin can broadcast to topics.
+- Optional policy:
+  - Admin‑only dev push: by default BFF restricts `/v1/push/dev/*` to admin. Set `PUSH_DEV_ALLOW_ALL=true` during local exploration.
+  - Topics gating: set `PUSH_TOPICS_ALLOW_ALL=false` on BFF to require admin/allowlist for subscribe/unsubscribe; allowlists: `PUSH_TOPICS_ALLOWED_PHONES`, `PUSH_TOPICS_ALLOWED_SUBS`.
+
+Firebase setup (for real push)
+- iOS:
+  - Download your `GoogleService-Info.plist` from Firebase console and place it at `ios/Runner/GoogleService-Info.plist` (a template exists at `ios/Runner/GoogleService-Info.plist.example`).
+  - In Xcode, enable Capabilities: Push Notifications and Background Modes → Remote notifications.
+  - Ensure your Bundle ID matches the Firebase iOS app.
+- Android:
+  - Download `google-services.json` and place it at `android/app/google-services.json` (a template exists at `android/app/google-services.json.example`).
+  - Ensure the applicationId in `android/app/build.gradle` matches the Firebase Android app package name.
+- Backend:
+  - Set `FCM_SERVER_KEY` in the BFF environment to your Firebase Cloud Messaging server key.
+- Notes: Without Firebase configured, the client will still register with an empty token and the BFF simulates delivery (useful for local dev).
+
+Local dev workflow
+1) Start core: `make core-up`
+2) Reseed data: `make core-reseed`
+3) Smoke test: `make smoke-core`
+4) Run app (desktop):
+   `cd clients/superapp_flutter && ../../tools/flutter/bin/flutter run -d macOS -t lib/main.dart --dart-define=SUPERAPP_API_BASE=http://localhost:8070`
 
 Settings & UX
 - Animations: Off/Normal/Smooth (Settings → Appearance) controls `AnimatedSwitcher` durations.

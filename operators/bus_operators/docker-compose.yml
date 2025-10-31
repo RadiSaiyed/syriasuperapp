@@ -8,6 +8,7 @@ services:
       - "5536:5432"
     volumes:
       - bus_operators_db_data:/var/lib/postgresql/data
+    networks: [devnet]
 
   api:
     build:
@@ -25,11 +26,18 @@ services:
     command: ["sh", "-c", "uvicorn operators.bus_operators.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8085} --reload"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks: [devnet]
 
   redis:
     image: redis:7-alpine
     ports:
       - "6385:6379"
+    networks: [devnet]
 
 volumes:
   bus_operators_db_data:
+
+networks:
+  devnet:
+    external: true
+    name: superapp_devnet

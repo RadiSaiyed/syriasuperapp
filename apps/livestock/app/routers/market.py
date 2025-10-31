@@ -277,7 +277,7 @@ def place_bid(auction_id: str, payload: BidIn, user: User = Depends(get_current_
     if not a or a.status != "open":
         raise HTTPException(status_code=404, detail="Auction not open")
     import datetime as dt
-    if a.ends_at <= dt.datetime.utcnow():
+    if a.ends_at <= dt.datetime.now(dt.timezone.utc):
         a.status = "closed"
         db.flush()
         raise HTTPException(status_code=400, detail="Auction ended")

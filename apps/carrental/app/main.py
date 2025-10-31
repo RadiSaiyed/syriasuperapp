@@ -49,7 +49,7 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status", "service"])

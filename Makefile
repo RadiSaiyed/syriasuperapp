@@ -5,12 +5,15 @@ SHELL := /bin/sh
 # Defaults
 STAYS_DB_URL ?= postgresql+psycopg2://postgres:postgres@localhost:5441/stays
 FOOD_DB_URL ?= postgresql+psycopg2://postgres:postgres@localhost:5443/food
+# Default BFF base for local dev; can be overridden: make core-reseed BFF_BASE=http://127.0.0.1:8070
+BFF_BASE ?= http://localhost:8070
 
-	help:
+help:
 	@echo "Targets:"
 	@echo "  payments-up  - start Payments (db, redis, api)"
 	@echo "  taxi-up      - start Taxi (db, redis, api)"
 	@echo "  taxi-e2e     - run Taxi local e2e (apps/taxi: e2e)"
+	@echo "  taxi-demo    - demo Taxi flow via BFF (rider+driver on same token)"
 	@echo "  e2e-full     - run cross-service E2E (Payments + Taxi)"
 	@echo "  tests        - run Taxi test suite"
 	@echo "  freight-up   - start Freight (db, redis, api)"
@@ -24,6 +27,7 @@ FOOD_DB_URL ?= postgresql+psycopg2://postgres:postgres@localhost:5443/food
 	@echo "  run-superapp-ipad - run Super‑App on 'Demo iPad' simulator"
 	@echo "  ios-create-iphone - create 'Demo iPhone' simulator (best effort)"
 	@echo "  run-superapp-iphone - run Super‑App on 'Demo iPhone' with prod defines"
+	@echo "  run-superapp-iphone-dev - run Super‑App on 'Demo iPhone' against local BFF ($(BFF_BASE))"
 	@echo "  bff-up       - start BFF (Backend for Frontend)"
 	@echo "  bff-down     - stop BFF"
 	@echo "  bff-run      - run BFF via Python (local)"
@@ -85,6 +89,32 @@ tests:
 	DB_URL=postgresql+psycopg2://postgres:postgres@localhost:5434/taxi \
 	pytest -q apps/taxi/tests
 
+# Quick Taxi demo: verify OTP via BFF, apply as driver, topup wallet, request a ride, accept, start, complete
+taxi-demo:
+	@set -e; \
+	BFF=$(BFF_BASE); \
+	PHONE=$${PHONE:-+963901234568}; \
+	NAME=$${NAME:-Dev User}; \
+	echo "[taxi-demo] BFF=$$BFF"; \
+	TOK=$$(curl -fsS -X POST "$$BFF/auth/verify_otp" -H 'Content-Type: application/json' -d '{"phone":"'"$$PHONE"'","otp":"123456","name":"'"$$NAME"'"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])'); \
+	H="Authorization: Bearer $$TOK"; \
+	echo "[taxi-demo] Apply driver..."; \
+	curl -fsS -X POST "$$BFF/taxi/driver/apply" -H "$$H" -H 'Content-Type: application/json' -d '{"vehicle_make":"Toyota","vehicle_plate":"ABC-123"}' | jq -c '.'; \
+	echo "[taxi-demo] Set available..."; \
+	curl -fsS -X PUT "$$BFF/taxi/driver/status" -H "$$H" -H 'Content-Type: application/json' -d '{"status":"available"}' | jq -c '.'; \
+	echo "[taxi-demo] Topup taxi wallet..."; \
+	curl -fsS -X POST "$$BFF/taxi/driver/taxi_wallet/topup" -H "$$H" -H 'Content-Type: application/json' -d '{"amount_cents":1000}' | jq -c '.'; \
+	echo "[taxi-demo] Request ride..."; \
+	RID=$$(curl -fsS -X POST "$$BFF/taxi/rides/request" -H "$$H" -H 'Content-Type: application/json' -d '{"pickup_lat":33.5138,"pickup_lon":36.2765,"dropoff_lat":33.5000,"dropoff_lon":36.3000}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])'); \
+	echo "[taxi-demo] Accept ride $$RID ..."; \
+	curl -fsS -X POST "$$BFF/taxi/rides/$$RID/accept" -H "$$H" | jq -c '.'; \
+	echo "[taxi-demo] Start ride..."; \
+	curl -fsS -X POST "$$BFF/taxi/rides/$$RID/start" -H "$$H" | jq -c '.'; \
+	echo "[taxi-demo] Move near drop and complete..."; \
+	curl -fsS -X PUT "$$BFF/taxi/driver/location" -H "$$H" -H 'Content-Type: application/json' -d '{"lat":33.5000,"lon":36.3000}' | jq -c '.'; \
+	curl -fsS -X POST "$$BFF/taxi/rides/$$RID/complete" -H "$$H" | jq -c '.'; \
+	echo "[taxi-demo] done"
+
 freight-up:
 	cd apps/freight && docker compose up -d db redis api
 
@@ -110,33 +140,12 @@ stays-reset-seed:
 	$(MAKE) stays-seed
 
 ios-create-ipad:
-	@python3 - <<'PY'
-	import json, subprocess
-	rid=''
-	try:
-	    j=json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json']))
-	    ios=[r for r in j.get('runtimes',[]) if r.get('isAvailable') and r.get('identifier','').startswith('com.apple.CoreSimulator.SimRuntime.iOS-')]
-	    ios_sorted=sorted(ios, key=lambda r: r.get('version',''))
-	    rid=(ios_sorted[-1]['identifier'] if ios_sorted else '')
-	except Exception:
-	    pass
-	dt=''
-	try:
-	    j=json.loads(subprocess.check_output(['xcrun','simctl','list','devicetypes','--json']))
-	    types=j.get('devicetypes',[])
-	    pref=[t for t in types if t.get('name')=='iPad (10th generation)']
-	    dt=(pref[0]['identifier'] if pref else next((t['identifier'] for t in types if t.get('name','').startswith('iPad')), ''))
-	except Exception:
-	    pass
-	name='Demo iPad'
-	if rid and dt:
-	    out=subprocess.check_output(['xcrun','simctl','list','devices','available']).decode()
-	    if name not in out:
-	        subprocess.check_call(['xcrun','simctl','create', name, dt, rid])
-	        print('Created', name)
-	else:
-	    print('Could not determine iOS runtime or iPad device type; skipping creation')
-	PY
+	@set -e; \
+	rid=$$(xcrun simctl list runtimes | awk -F'[()]' '/iOS /{id=$$2} END{print id}'); \
+	if [ -z "$$rid" ]; then echo 'No iOS runtime found'; exit 0; fi; \
+	dt=$$(xcrun simctl list devicetypes | awk -F'[()]' '/iPad \(10th generation\)/{print $$2; found=1} END{if(!found){exit 1}}') || dt=$$(xcrun simctl list devicetypes | awk -F'[()]' '/^\s*iPad /{print $$2; exit}'); \
+	name='Demo iPad'; \
+	if ! xcrun simctl list devices available | grep -q "$$name"; then xcrun simctl create "$$name" "$$dt" "$$rid" && echo Created $$name; fi
 
 run-superapp-ipad:
 	open -a Simulator || true
@@ -148,43 +157,32 @@ run-superapp-ipad:
 	 cd clients/superapp_flutter && ../../tools/flutter/bin/flutter run -d "$$DEVICE" -t lib/main.dart
 
 ios-create-iphone:
-	@python3 - <<'PY'
-	import json, subprocess
-	rid=''
-	try:
-	    j=json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json']))
-	    ios=[r for r in j.get('runtimes',[]) if r.get('isAvailable') and r.get('identifier','').startswith('com.apple.CoreSimulator.SimRuntime.iOS-')]
-	    ios_sorted=sorted(ios, key=lambda r: r.get('version',''))
-	    rid=(ios_sorted[-1]['identifier'] if ios_sorted else '')
-	except Exception:
-	    pass
-	dt=''
-	try:
-	    j=json.loads(subprocess.check_output(['xcrun','simctl','list','devicetypes','--json']))
-	    types=j.get('devicetypes',[])
-	    pref=[t for t in types if t.get('name')=='iPhone 15 Pro']
-	    dt=(pref[0]['identifier'] if pref else next((t['identifier'] for t in types if t.get('name','').startswith('iPhone')), ''))
-	except Exception:
-	    pass
-	name='Demo iPhone'
-	if rid and dt:
-	    out=subprocess.check_output(['xcrun','simctl','list','devices','available']).decode()
-	    if name not in out:
-	        subprocess.check_call(['xcrun','simctl','create', name, dt, rid])
-	        print('Created', name)
-	else:
-	    print('Could not determine iOS runtime or iPhone device type; skipping creation')
-	PY
+	@set -e; \
+	rid=$$(xcrun simctl list runtimes | awk -F'[()]' '/iOS /{id=$$2} END{print id}'); \
+	if [ -z "$$rid" ]; then echo 'No iOS runtime found'; exit 0; fi; \
+	dt=$$(xcrun simctl list devicetypes | awk -F'[()]' '/iPhone 15 Pro/{print $$2; found=1} END{if(!found){exit 1}}') || dt=$$(xcrun simctl list devicetypes | awk -F'[()]' '/^\s*iPhone /{print $$2; exit}'); \
+	name='Demo iPhone'; \
+	if ! xcrun simctl list devices available | grep -q "$$name"; then xcrun simctl create "$$name" "$$dt" "$$rid" && echo Created $$name; fi
 
 run-superapp-iphone:
 	open -a Simulator || true
 	$(MAKE) ios-create-iphone
-	- xcrun simctl boot "Demo iPhone"
+	- BOOT=$$(xcrun simctl list devices | awk -F'[()]' '/Demo iPhone/{print $$2; exit}'); if [ -n "$$BOOT" ]; then xcrun simctl boot "$$BOOT"; fi || true
 	cd clients/superapp_flutter/ios && pod install || true
 	cd clients/superapp_flutter && ../../tools/flutter/bin/flutter pub get
-	@DEVICE=$$(../../tools/flutter/bin/flutter devices | awk '/Demo iPhone/{print $$1}' | head -n1); \
+	@DEVICE=$$(tools/flutter/bin/flutter devices | awk '/Demo iPhone/{print $$1}' | head -n1); \
 	 if [ -z "$$DEVICE" ]; then DEVICE="Demo iPhone"; fi; \
 	cd clients/superapp_flutter && ../../tools/flutter/bin/flutter run -d "$$DEVICE" --release --dart-define-from-file=dart_defines/prod.json
+
+run-superapp-iphone-dev:
+	open -a Simulator || true
+	$(MAKE) ios-create-iphone
+	- BOOT=$$(xcrun simctl list devices | awk -F'[()]' '/Demo iPhone/{print $$2; exit}'); if [ -n "$$BOOT" ]; then xcrun simctl boot "$$BOOT"; fi || true
+	cd clients/superapp_flutter/ios && pod install || true
+	cd clients/superapp_flutter && ../../tools/flutter/bin/flutter pub get
+	@DEVICE=$$(tools/flutter/bin/flutter devices | awk '/Demo iPhone/{print $$1}' | head -n1); \
+	 if [ -z "$$DEVICE" ]; then DEVICE="Demo iPhone"; fi; \
+	cd clients/superapp_flutter && ../../tools/flutter/bin/flutter run -d "$$DEVICE" -t lib/main.dart --dart-define=SUPERAPP_API_BASE=$(BFF_BASE)
 
 bff-up:
 	cd apps/bff && docker compose up -d --build
@@ -192,7 +190,7 @@ bff-up:
 bff-down:
 	cd apps/bff && docker compose down || true
 
-	bff-run:
+bff-run:
 	ENV=dev APP_PORT=8070 PYTHONPATH=. python3 -m apps.bff.app.main
 
 # Core stack helpers (Payments, Chat, Commerce, Stays, BFF)
@@ -211,7 +209,27 @@ core-down:
 	cd apps/payments && docker compose down || true
 
 smoke-core:
-	./tools/dev_smoke.sh ${BFF_BASE:-http://localhost:8070}
+	./tools/dev_smoke.sh $(BFF_BASE)
+
+core-reseed:
+	@set -e; \
+	BFF=$(BFF_BASE); \
+	PHONE=${PHONE:-+963901234568}; \
+	NAME=${NAME:-Dev User}; \
+	echo "[reseed] BFF=$$BFF"; \
+	TOK=$$(curl -fsS -X POST "$$BFF/auth/verify_otp" -H 'Content-Type: application/json' -d '{"phone":"'"$$PHONE"'","otp":"123456","name":"'"$$NAME"'"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])'); \
+	curl -fsS -X POST "$$BFF/stays/dev/seed" -H "Authorization: Bearer $$TOK" -H 'Content-Type: application/json' | jq -c '.'; \
+	curl -fsS -X POST "$$BFF/chat/dev/seed" -H "Authorization: Bearer $$TOK" -H 'Content-Type: application/json' | jq -c '.'; \
+	echo "[reseed] done"
+
+core-logs:
+	@echo "Tailing core logs (Ctrl-C to stop)"; \
+	docker logs -f payments-api & \
+	docker logs -f chat-api & \
+	docker logs -f commerce-api & \
+	docker logs -f stays-api & \
+	docker logs -f superapp-bff & \
+	wait
 
 up-all:
 	cd apps/payments && docker compose up -d db redis api

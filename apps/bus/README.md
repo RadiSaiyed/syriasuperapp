@@ -51,3 +51,11 @@ Payments Integration
 Operator Notes (DEV)
 - Register an operator: `POST /operators/register` with form fields `name` and optional `merchant_phone`.
 - Set `PAYMENTS_BASE_URL` and `PAYMENTS_INTERNAL_SECRET` in `.env` to enable internal calls.
+
+Production notes
+- Set `ENV=prod` and provide strong secrets: `JWT_SECRET`, `PAYMENTS_INTERNAL_SECRET`.
+- Set explicit `ALLOWED_ORIGINS` (no `*` in prod). When using `*`, credentials are automatically disabled by the service.
+- Enforce Redis rate limiting: `RATE_LIMIT_BACKEND=redis` and `REDIS_URL=...`.
+- Disable automatic schema creation: `AUTO_CREATE_SCHEMA=false` and run Alembic migrations out-of-band.
+- Optional: set `SENTRY_DSN` and `SENTRY_TRACES_SAMPLE_RATE` for error tracking.
+- Behind a proxy/load balancer, set `PROXY_TRUSTED_IPS` or run uvicorn with `--proxy-headers`.

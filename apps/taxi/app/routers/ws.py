@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..ws_manager import ride_ws_manager, driver_ws_manager
@@ -39,7 +39,7 @@ async def ws_ride_status(websocket: WebSocket, ride_id: str):
                     "final_fare_cents": ride.final_fare_cents,
                     "distance_km": ride.distance_km,
                     "stops": [{"lat": s.lat, "lon": s.lon} for s in stops] or None,
-                    "ts": datetime.utcnow().isoformat() + "Z",
+                    "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 }
                 await websocket.send_json(payload)
         except Exception:

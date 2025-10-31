@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Tuple
 
 import httpx
@@ -26,7 +26,7 @@ def _ttl_cache(ttl_secs: int) -> Tuple[Callable[[str], dict | None], Callable[[s
         if not ent:
             return None
         exp, val = ent
-        if exp >= datetime.utcnow():
+        if exp >= datetime.now(timezone.utc):
             return val
         store.pop(key, None)
         return None
@@ -34,7 +34,7 @@ def _ttl_cache(ttl_secs: int) -> Tuple[Callable[[str], dict | None], Callable[[s
     def set_(key: str, val: dict):
         if ttl_secs <= 0:
             return
-        store[key] = (datetime.utcnow() + timedelta(seconds=ttl_secs), val)
+        store[key] = (datetime.now(timezone.utc) + timedelta(seconds=ttl_secs), val)
 
     return get, set_
 

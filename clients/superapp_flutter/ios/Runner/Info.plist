@@ -49,6 +49,11 @@
 	<string>Access contacts to select phone numbers for payments.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to unlock the app.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Allow background location to auto-stop sessions when leaving zones.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

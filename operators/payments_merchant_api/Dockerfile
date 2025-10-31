@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY libs/superapp_shared/superapp_shared /app/superapp_shared
 COPY apps/payments/app /app/app
+COPY operators/_shared /app/operators/_shared
 COPY apps/payments/alembic.ini /app/
 COPY apps/payments/alembic /app/alembic
 COPY operators/payments_merchant_api /app/operators/payments_merchant_api

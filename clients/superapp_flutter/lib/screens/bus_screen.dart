@@ -4,7 +4,6 @@ import 'package:shared_ui/glass.dart';
 import 'bus_trip_screen.dart';
 import 'bus_booking_detail_screen.dart';
 import 'package:shared_ui/message_host.dart';
-import 'package:shared_ui/toast.dart';
 import 'package:shared_core/shared_core.dart';
 
 import '../ui/errors.dart';

@@ -1,5 +1,13 @@
 from fastapi import FastAPI, Response, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+try:
+    from starlette.middleware.forwarded import ForwardedMiddleware as _ForwardedOrProxy
+except Exception:
+    try:
+        from starlette.middleware.proxy_headers import ProxyHeadersMiddleware as _ForwardedOrProxy
+    except Exception:
+        _ForwardedOrProxy = None  # type: ignore
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
@@ -35,7 +43,7 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
@@ -113,6 +121,16 @@ def create_app() -> FastAPI:
         usr = ensure_user(db, u["phone"], u.get("name"))
         token = _make_token(str(usr.id))
         return TokenOut(access_token=token)
+
+    # Trusted hosts + forwarded headers
+    allowed_hosts = getattr(settings, "ALLOWED_HOSTS", None) or (["*"] if settings.ENV != "prod" else ["api.example.com"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    proxy_trusted = getattr(settings, "PROXY_TRUSTED_IPS", None)
+    if proxy_trusted and _ForwardedOrProxy:
+        try:
+            app.add_middleware(_ForwardedOrProxy, trusted_hosts=proxy_trusted)
+        except Exception:
+            pass
 
     app.include_router(listings_router.router)
     app.include_router(favorites_router.router)

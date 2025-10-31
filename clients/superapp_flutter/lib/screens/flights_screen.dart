@@ -24,11 +24,13 @@ class _FlightsScreenState extends State<FlightsScreen> {
     try {
       final r = await http.get(_flightsUri('/health'));
       final js = jsonDecode(r.body);
+      if (!mounted) return;
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
+      if (!mounted) return;
       MessageHost.showErrorBanner(context, '$e');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

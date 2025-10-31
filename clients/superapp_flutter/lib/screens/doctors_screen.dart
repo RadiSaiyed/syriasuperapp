@@ -43,11 +43,13 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
         '/health',
         options: const RequestOptions(cacheTtl: Duration(minutes: 5), staleIfOffline: true),
       );
+      if (!mounted) return;
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
+      if (!mounted) return;
       MessageHost.showErrorBanner(context, '$e');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

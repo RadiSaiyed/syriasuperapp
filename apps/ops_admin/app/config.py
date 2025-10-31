@@ -20,8 +20,8 @@ if not settings.DEV_MODE:
     if not settings.OPS_ADMIN_BASIC_USER or not settings.OPS_ADMIN_BASIC_PASS:
         raise RuntimeError("OPS_ADMIN_BASIC_USER and OPS_ADMIN_BASIC_PASS must be set when ENV!=dev")
     # Enforce redis rate limiter parity in prod
-    if settings.RATE_LIMIT_BACKEND.lower() != "redis":
+    backend = (getattr(settings, "RATE_LIMIT_BACKEND", "") or "").lower()
+    if backend != "redis":
         raise RuntimeError("RATE_LIMIT_BACKEND must be 'redis' when ENV!=dev")
     if not settings.REDIS_URL or not settings.REDIS_URL.startswith("redis://"):
         raise RuntimeError("REDIS_URL must be set to a redis:// URL when ENV!=dev")
-

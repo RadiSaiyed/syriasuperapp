@@ -46,11 +46,13 @@ class _JobsScreenState extends State<JobsScreen> {
     try {
       final r = await http.get(_jobsUri('/health'));
       final js = jsonDecode(r.body);
+      if (!mounted) return;
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
+      if (!mounted) return;
       MessageHost.showErrorBanner(context, '$e');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -61,15 +63,17 @@ class _JobsScreenState extends State<JobsScreen> {
       final r = await http.get(_jobsUri('/jobs/recommendations', query: {'q': q}));
       if (r.statusCode >= 400) throw Exception(r.body);
       final data = jsonDecode(r.body) as Map<String, dynamic>;
+      if (!mounted) return;
       setState(() {
         _jobs = ((data['jobs'] as List?) ?? [])
             .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
             .toList();
       });
     } catch (e) {
+      if (!mounted) return;
       MessageHost.showErrorBanner(context, '$e');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

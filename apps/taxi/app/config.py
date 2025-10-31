@@ -203,7 +203,8 @@ if not settings.DEV_MODE:
     if getattr(settings, "OTP_MODE", None) == "dev":
         raise RuntimeError("OTP_MODE=dev is not permitted when ENV!=dev")
     # Rate limiter must be redis in prod
-    if settings.RATE_LIMIT_BACKEND.lower() != "redis":
+    backend = (getattr(settings, "RATE_LIMIT_BACKEND", "") or "").lower()
+    if backend != "redis":
         raise RuntimeError("RATE_LIMIT_BACKEND must be 'redis' when ENV!=dev")
     if not settings.REDIS_URL or not settings.REDIS_URL.startswith("redis://"):
         raise RuntimeError("REDIS_URL must be set to a redis:// URL when ENV!=dev")

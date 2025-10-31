@@ -13,3 +13,7 @@ reportlab==4.2.5
 openpyxl==3.1.5
 pyotp==2.9.0
 alembic==1.13.2
+opentelemetry-sdk==1.26.0
+opentelemetry-exporter-otlp==1.26.0
+opentelemetry-instrumentation-fastapi==0.47b0
+opentelemetry-instrumentation-httpx==0.47b0

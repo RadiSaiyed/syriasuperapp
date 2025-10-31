@@ -110,10 +110,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ]))) else const SizedBox.shrink(),
         if (wallet != null) Glass(child: Padding(padding: const EdgeInsets.all(12), child: Row(children: [
           const Icon(Icons.account_balance_wallet_outlined, size: 18), const SizedBox(width: 8),
-          // Robust display: support both flattened and nested wallet
+          // Robust display: support both flattened and nested wallet without double-indexing
           Expanded(child: Builder(builder: (ctx) {
-            final bal = (wallet['balance_cents'] ?? (wallet['wallet']?['balance_cents']))?.toString() ?? '';
-            final cur = (wallet['currency_code'] ?? (wallet['wallet']?['currency_code']))?.toString() ?? '';
+            dynamic nested = wallet['wallet'];
+            final bal = (wallet['balance_cents'] ?? (nested is Map ? nested['balance_cents'] : null))?.toString() ?? '';
+            final cur = (wallet['currency_code'] ?? (nested is Map ? nested['currency_code'] : null))?.toString() ?? '';
             return Text('Wallet: $bal $cur');
           })),
         ]))) else const SizedBox.shrink(),

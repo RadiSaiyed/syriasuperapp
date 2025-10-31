@@ -25,11 +25,13 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final r = await http.get(_chatUri('/health'));
       final js = jsonDecode(r.body);
+      if (!mounted) return;
       setState(() => _health = '${js['status']} (${js['env']})');
     } catch (e) {
+      if (!mounted) return;
       MessageHost.showErrorBanner(context, '$e');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

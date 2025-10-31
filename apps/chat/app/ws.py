@@ -59,7 +59,7 @@ async def ws_endpoint(websocket: WebSocket):
                 u = db.get(User, user_id)
                 if u:
                     import datetime as dt
-                    u.last_seen = dt.datetime.utcnow()
+                    u.last_seen = dt.datetime.now(dt.timezone.utc)
                 break
     except Exception:
         pass
@@ -82,7 +82,7 @@ async def ws_endpoint(websocket: WebSocket):
                     u = db.get(User, user_id)
                     if u:
                         import datetime as dt
-                        u.last_seen = dt.datetime.utcnow()
+                        u.last_seen = dt.datetime.now(dt.timezone.utc)
                     break
         except Exception:
             pass

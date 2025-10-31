@@ -13,6 +13,13 @@ services:
       - PAYMENTS_BASE_URL=${PAYMENTS_BASE_URL:-http://host.docker.internal:8080}
       - REDIS_URL=${REDIS_URL:-redis://payments-redis:6379/9}
       - FCM_SERVER_KEY=${FCM_SERVER_KEY:-}
+      # Optional security knobs (uncomment to apply)
+      # - PUSH_DEV_ALLOW_ALL=false           # require admin for /v1/push/dev/* even in non‑prod
+      # - PUSH_TOPICS_ALLOW_ALL=true         # if false, require admin/allowlist for topic subscribe/unsubscribe
+      # - PUSH_DEV_ALLOWED_PHONES=+963901..., +963902...
+      # - PUSH_DEV_ALLOWED_SUBS=<user-uuid-1>,<user-uuid-2>
+      # - PUSH_TOPICS_ALLOWED_PHONES=+963901..., +963902...
+      # - PUSH_TOPICS_ALLOWED_SUBS=<user-uuid-1>,<user-uuid-2>
     ports:
       - "8070:8070"
     extra_hosts:

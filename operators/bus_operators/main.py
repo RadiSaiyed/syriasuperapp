@@ -1,7 +1,15 @@
 from fastapi import FastAPI, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from sqlalchemy import text
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+try:
+    from starlette.middleware.forwarded import ForwardedMiddleware as _ForwardedOrProxy  # Starlette >=0.37
+except Exception:  # fallback for older Starlette
+    try:
+        from starlette.middleware.proxy_headers import ProxyHeadersMiddleware as _ForwardedOrProxy  # type: ignore
+    except Exception:  # pragma: no cover - if neither is available
+        _ForwardedOrProxy = None  # type: ignore
+from sqlalchemy import text, func, select, case
 
 # Import Bus domain app primitives via PYTHONPATH=apps/bus
 from app.config import settings
@@ -10,7 +18,7 @@ from app.models import Base
 from app.middleware_request_id import RequestIDMiddleware
 from app.middleware_rate_limit import SlidingWindowLimiter
 from app.middleware_rate_limit_redis import RedisRateLimiter
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import PlainTextResponse
 import json
@@ -29,6 +37,7 @@ from app.schemas import TokenOut
 from fastapi import HTTPException, status, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from operators._shared.common import SecurityHeadersMiddleware, init_tracing
 
 
 def create_app() -> FastAPI:
@@ -42,33 +51,57 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-    allowed_origins = settings.ALLOWED_ORIGINS or ["*"]
+    # CORS: avoid browsers blocking preflights when using credentials with '*'
+    allowed_origins = settings.ALLOWED_ORIGINS or []
+    allow_credentials = bool(getattr(settings, "CORS_ALLOW_CREDENTIALS", True))
+    if not allowed_origins:
+        # Public API without browser credentials when no explicit origins set
+        allowed_origins = ["*"]
+        allow_credentials = False
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_credentials=allow_credentials,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
+
+    # Trusted hosts: limit Host header to expected values (behind proxies/load balancers)
+    allowed_hosts = getattr(settings, "ALLOWED_HOSTS", None) or (["*"] if settings.ENV != "prod" else ["api.example.com"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+
+    # Forwarded/Proxy headers: respect X-Forwarded-* / Forwarded when trusted proxies are configured
+    proxy_trusted = getattr(settings, "PROXY_TRUSTED_IPS", None)
+    if proxy_trusted and _ForwardedOrProxy:
+        try:
+            app.add_middleware(_ForwardedOrProxy, trusted_hosts=proxy_trusted)  # type: ignore[arg-type]
+        except Exception:
+            pass
 
     # Request ID + JSON logs
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=500)
 
     # Rate limit
-    if settings.RATE_LIMIT_BACKEND.lower() == "redis":
+    common_excludes = ["/health", "/health/deps", "/metrics", "/info", "/openapi.yaml", "/openapi.json", "/ui", "/docs"]
+    backend = (getattr(settings, "RATE_LIMIT_BACKEND", "") or "").lower()
+    if backend == "redis":
         app.add_middleware(
             RedisRateLimiter,
             redis_url=settings.REDIS_URL,
             limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
             auth_boost=settings.RATE_LIMIT_AUTH_BOOST,
             prefix=settings.RATE_LIMIT_REDIS_PREFIX,
+            exclude_paths=common_excludes,
         )
     else:
         app.add_middleware(
             SlidingWindowLimiter,
             limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
             auth_boost=settings.RATE_LIMIT_AUTH_BOOST,
+            exclude_paths=common_excludes,
         )
 
     if getattr(settings, "AUTO_CREATE_SCHEMA", False):
@@ -80,16 +113,26 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["health"])
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
+    LAT = Histogram(
+        "http_request_duration_seconds",
+        "Request duration",
+        ["method", "path"],
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+    )
 
     @app.middleware("http")
     async def _metrics_mw(request, call_next):
-        response = await call_next(request)
+        route = request.scope.get("route")
+        path_tmpl = getattr(route, "path", request.url.path)
+        method = request.method
+        with LAT.labels(method, path_tmpl).time():
+            response = await call_next(request)
         try:
-            REQ.labels(request.method, request.url.path, str(response.status_code)).inc()
+            REQ.labels(method, path_tmpl, str(response.status_code)).inc()
         except Exception:
             pass
         return response
@@ -97,6 +140,9 @@ def create_app() -> FastAPI:
     @app.get("/metrics", include_in_schema=False)
     def metrics():
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # Initialize tracing if configured
+    init_tracing(app, default_name="bus_operators")
 
     # OpenAPI: add global HTTP Bearer scheme
     def custom_openapi():
@@ -119,10 +165,14 @@ def create_app() -> FastAPI:
         security_schemes["HTTPBearer"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
         openapi_schema["security"] = [{"HTTPBearer": []}]
         openapi_schema["tags"] = tags_meta
-        no_auth_paths = ["/health", "/health/deps", "/info", "/openapi.yaml"]
-        for p in no_auth_paths:
-            if p in openapi_schema.get("paths", {}):
-                for op in openapi_schema["paths"][p].values():
+        no_auth_paths = {
+            "/", "/docs", "/openapi.json", "/openapi.yaml",
+            "/metrics", "/ui", "/health", "/health/deps", "/info",
+            "/auth/dev_login_operator",
+        }
+        for p, ops in openapi_schema.get("paths", {}).items():
+            if p in no_auth_paths:
+                for op in ops.values():
                     op["security"] = []
         app.openapi_schema = openapi_schema
         return app.openapi_schema
@@ -148,17 +198,20 @@ def create_app() -> FastAPI:
         u = users.get(payload.username.lower())
         if not u or payload.password != u["password"]:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        created = False
         user = db.query(User).filter(User.phone == u["phone"]).one_or_none()
         if user is None:
             user = User(phone=u["phone"], name=u.get("name"))
             db.add(user)
             db.flush()
+            created = True
         # Ensure at least one operator and membership
         op = db.query(Operator).order_by(Operator.created_at.asc()).first()
         if op is None:
             op = Operator(name="Dev Operator")
             db.add(op)
             db.flush()
+            created = True
         mem = (
             db.query(OperatorMember)
             .filter(OperatorMember.operator_id == op.id, OperatorMember.user_id == user.id)
@@ -168,6 +221,12 @@ def create_app() -> FastAPI:
             mem = OperatorMember(operator_id=op.id, user_id=user.id, role="admin")
             db.add(mem)
             db.flush()
+            created = True
+        if created:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
         token = create_access_token(str(user.id), user.phone)
         return TokenOut(access_token=token)
 
@@ -182,35 +241,43 @@ def create_app() -> FastAPI:
         if not mems:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not an operator member")
         op_summaries = []
-        from datetime import datetime, timedelta
-        now = datetime.utcnow(); since7 = now - timedelta(days=7); since30 = now - timedelta(days=30)
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc); since7 = now - timedelta(days=7); since30 = now - timedelta(days=30)
+        # Aggregate counts in batch per operator to avoid N+1 queries
+        op_ids = [op.id for (_mem, op) in mems]
+        trips_per_op = {}
+        if op_ids:
+            rows = db.execute(
+                select(Trip.operator_id, func.count(Trip.id)).where(Trip.operator_id.in_(op_ids)).group_by(Trip.operator_id)
+            ).all()
+            trips_per_op = {row[0]: int(row[1] or 0) for row in rows}
+            b_rows = db.execute(
+                select(
+                    Trip.operator_id.label("op_id"),
+                    func.count(Booking.id).label("total"),
+                    func.sum(case((Booking.created_at >= since7, 1), else_=0)).label("b7"),
+                    func.sum(case((Booking.created_at >= since30, 1), else_=0)).label("b30"),
+                )
+                .join(Trip, Trip.id == Booking.trip_id)
+                .where(Trip.operator_id.in_(op_ids))
+                .group_by(Trip.operator_id)
+            ).all()
+            bkg_by_op = {row.op_id: row for row in b_rows}
+        else:
+            bkg_by_op = {}
         for mem, op in mems:
-            trips = db.query(Trip).filter(Trip.operator_id == op.id).count()
-            b_total = (
-                db.query(Booking)
-                .join(Trip, Trip.id == Booking.trip_id)
-                .filter(Trip.operator_id == op.id)
-                .count()
-            )
-            b7 = (
-                db.query(Booking)
-                .join(Trip, Trip.id == Booking.trip_id)
-                .filter(Trip.operator_id == op.id, Booking.created_at >= since7)
-                .count()
-            )
-            b30 = (
-                db.query(Booking)
-                .join(Trip, Trip.id == Booking.trip_id)
-                .filter(Trip.operator_id == op.id, Booking.created_at >= since30)
-                .count()
-            )
+            trips = trips_per_op.get(op.id, 0)
+            bc = bkg_by_op.get(op.id)
+            b_total = int(getattr(bc, "total", 0) or 0)
+            b7 = int(getattr(bc, "b7", 0) or 0)
+            b30 = int(getattr(bc, "b30", 0) or 0)
             op_summaries.append({
                 "operator_id": str(op.id),
                 "operator_name": op.name,
                 "role": mem.role,
                 "trips_total": int(trips),
-                "bookings_total": int(b_total),
-                "metrics": {"7d": {"bookings_total": int(b7)}, "30d": {"bookings_total": int(b30)}},
+                "bookings_total": b_total,
+                "metrics": {"7d": {"bookings_total": b7}, "30d": {"bookings_total": b30}},
             })
         return {"user": {"id": str(user.id), "phone": user.phone, "name": user.name}, "operators": op_summaries}
     @app.get("/health/deps", tags=["health"])
@@ -251,6 +318,8 @@ def create_app() -> FastAPI:
 
     @app.get("/ui", include_in_schema=False)
     def ui():
+        import secrets
+        nonce = secrets.token_urlsafe(16)
         html = f"""
 <!doctype html>
 <meta charset=\"utf-8\">
@@ -347,7 +416,7 @@ def create_app() -> FastAPI:
     <pre id=\"prout\"></pre>
   </div>
 </div>
-<script>
+<script nonce=\"{nonce}\">
 const out=document.getElementById('out');
 const opout=document.getElementById('opout');
 const tkt=document.getElementById('tkt');
@@ -358,7 +427,16 @@ function auth(){ const t=document.getElementById('tok').value.trim(); return t?{
 async function info(){ const r=await fetch('/info'); out.textContent=await r.text(); }
 async function health(){ const r=await fetch('/health'); out.textContent=await r.text(); }
 async function me(){ const r=await fetch('/me',{headers: auth()}); out.textContent=await r.text(); }
-function updateCSV(){ const op=document.getElementById('opid').value.trim(); const st=document.getElementById('csv_status').value; let href='/operators/'+op+'/bookings.csv'; if(st) href += '?status='+encodeURIComponent(st); document.getElementById('csv').href=href; }
+function updateCSV(){
+  const op = document.getElementById('opid').value.trim();
+  if(!op){ return; }
+  const st = document.getElementById('csv_status').value;
+  let href = '/operators/' + encodeURIComponent(op) + '/bookings.csv';
+  if (st) href += '?status=' + encodeURIComponent(st);
+  const a = document.getElementById('csv');
+  a.href = href;
+  a.setAttribute('download','bookings.csv');
+}
 async function listTrips(){ const op=document.getElementById('opid').value.trim(); const r=await fetch('/operators/'+op+'/trips',{headers:auth()}); opout.textContent=await r.text(); }
 async function summary(){ const op=document.getElementById('opid').value.trim(); const d=parseInt(document.getElementById('since').value||'7',10); const r=await fetch('/operators/'+op+'/reports/summary?since_days='+d,{headers:auth()}); opout.textContent=await r.text(); }
 async function manifest(){ const op=document.getElementById('opid').value.trim(); const tid=document.getElementById('trip_id').value.trim(); const r=await fetch('/operators/'+op+'/trips/'+tid+'/manifest',{headers:auth()}); opout.textContent=await r.text(); }
@@ -368,18 +446,23 @@ async function cloneTrip(){ const op=document.getElementById('opid').value.trim(
 async function listBranches(){ const op=document.getElementById('opid').value.trim(); const r=await fetch('/operators/'+op+'/branches',{headers:auth()}); brout.textContent=await r.text(); }
 async function createBranch(){ const op=document.getElementById('opid').value.trim(); const body={name: document.getElementById('br_name').value, commission_bps: parseInt(document.getElementById('br_fee').value||'0',10)}; const r=await fetch('/operators/'+op+'/branches',{method:'POST', headers:{...auth(), 'Content-Type':'application/json'}, body: JSON.stringify(body)}); brout.textContent=await r.text(); }
 async function updateBranch(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('br_id').value.trim(); const body={name: document.getElementById('br_name2').value, commission_bps: parseInt(document.getElementById('br_fee2').value||'0',10)}; const r=await fetch('/operators/'+op+'/branches/'+id,{method:'PATCH', headers:{...auth(), 'Content-Type':'application/json'}, body: JSON.stringify(body)}); brout.textContent=await r.text(); }
-async function deleteBranch(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('br_id').value.trim(); const r=await fetch('/operators/'+op+'/branches/'+id',{method:'DELETE', headers:auth()}); brout.textContent=await r.text(); }
+async function deleteBranch(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('br_id').value.trim(); const r=await fetch('/operators/'+op+'/branches/'+id,{method:'DELETE', headers:auth()}); brout.textContent=await r.text(); }
 async function listVehicles(){ const op=document.getElementById('opid').value.trim(); const r=await fetch('/operators/'+op+'/vehicles',{headers:auth()}); vhout.textContent=await r.text(); }
 async function createVehicle(){ const op=document.getElementById('opid').value.trim(); const body={name: document.getElementById('vh_name').value, seats_total: parseInt(document.getElementById('vh_seats').value||'0',10), seat_columns: document.getElementById('vh_cols').value}; const r=await fetch('/operators/'+op+'/vehicles',{method:'POST', headers:{...auth(), 'Content-Type':'application/json'}, body: JSON.stringify(body)}); vhout.textContent=await r.text(); }
-async function updateVehicle(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('vh_id').value.trim(); const body={name: document.getElementById('vh_name2').value, seats_total: parseInt(document.getElementById('vh_seats2').value||'0',10), seat_columns: document.getElementById('vh_cols2').value}; const r=await fetch('/operators/'+op+'/vehicles/'+id',{method:'PATCH', headers:{...auth(), 'Content-Type':'application/json'}, body: JSON.stringify(body)}); vhout.textContent=await r.text(); }
-async function deleteVehicle(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('vh_id').value.trim(); const r=await fetch('/operators/'+op+'/vehicles/'+id',{method:'DELETE', headers:auth()}); vhout.textContent=await r.text(); }
+async function updateVehicle(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('vh_id').value.trim(); const body={name: document.getElementById('vh_name2').value, seats_total: parseInt(document.getElementById('vh_seats2').value||'0',10), seat_columns: document.getElementById('vh_cols2').value}; const r=await fetch('/operators/'+op+'/vehicles/'+encodeURIComponent(id),{method:'PATCH', headers:{...auth(), 'Content-Type':'application/json'}, body: JSON.stringify(body)}); vhout.textContent=await r.text(); }
+async function deleteVehicle(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('vh_id').value.trim(); const r=await fetch('/operators/'+op+'/vehicles/'+id,{method:'DELETE', headers:auth()}); vhout.textContent=await r.text(); }
 async function listPromos(){ const op=document.getElementById('opid').value.trim(); const r=await fetch('/operators/'+op+'/promos',{headers:auth()}); prout.textContent=await r.text(); }
 async function createPromo(){ const op=document.getElementById('opid').value.trim(); const body={code: pr_code.value, percent_off_bps: pr_bps.value?parseInt(pr_bps.value,10):null, amount_off_cents: pr_amt.value?parseInt(pr_amt.value,10):null, valid_from:null, valid_until:null, max_uses:null, per_user_max_uses:null, min_total_cents:null, active: pr_active.checked}; const r=await fetch('/operators/'+op+'/promos',{method:'POST', headers:{...auth(), 'Content-Type':'application/json'}, body: JSON.stringify(body)}); prout.textContent=await r.text(); }
-async function updatePromo(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('pr_id').value.trim(); const body={percent_off_bps: pr_bps2.value?parseInt(pr_bps2.value,10):null, amount_off_cents: pr_amt2.value?parseInt(pr_amt2.value,10):null, active: document.getElementById('pr_act2').checked}; const r=await fetch('/operators/'+op+'/promos/'+id',{method:'PATCH', headers:{...auth(), 'Content-Type':'application/json'}, body: JSON.stringify(body)}); prout.textContent=await r.text(); }
-async function deletePromo(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('pr_id').value.trim(); const r=await fetch('/operators/'+op+'/promos/'+id',{method:'DELETE', headers:auth()}); prout.textContent=await r.text(); }
+async function updatePromo(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('pr_id').value.trim(); const body={percent_off_bps: pr_bps2.value?parseInt(pr_bps2.value,10):null, amount_off_cents: pr_amt2.value?parseInt(pr_amt2.value,10):null, active: document.getElementById('pr_act2').checked}; const r=await fetch('/operators/'+op+'/promos/'+id,{method:'PATCH', headers:{...auth(), 'Content-Type':'application/json'}, body: JSON.stringify(body)}); prout.textContent=await r.text(); }
+async function deletePromo(){ const op=document.getElementById('opid').value.trim(); const id=document.getElementById('pr_id').value.trim(); const r=await fetch('/operators/'+op+'/promos/'+id,{method:'DELETE', headers:auth()}); prout.textContent=await r.text(); }
 </script>
 """
-        return PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        resp = PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        try:
+            resp.headers["Content-Security-Policy"] = f"script-src 'self' 'nonce-{nonce}'"
+        except Exception:
+            pass
+        return resp
     
     @app.get("/", include_in_schema=False)
     def root():

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import secrets
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request, Header
@@ -72,7 +72,7 @@ def _driver_has_min_balance(db: Session, driver: Driver, min_cents: int) -> bool
         if not user:
             return False
         phone = user.phone
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         ttl = max(1, int(getattr(settings, "PAYMENTS_WALLET_CACHE_SECS", 30)))
         global _WALLET_BAL_CACHE  # type: ignore
         if "_WALLET_BAL_CACHE" not in globals():
@@ -627,7 +627,7 @@ def accept_ride(ride_id: str, background_tasks: BackgroundTasks, user: User = De
     ride.driver_id = drv.id
     ride.status = "accepted"
     if not getattr(ride, 'accepted_at', None):
-        ride.accepted_at = datetime.utcnow()
+        ride.accepted_at = datetime.now(timezone.utc)
     # Driver becomes busy upon accepting
     drv.status = "busy"
     db.flush()
@@ -729,7 +729,7 @@ def start_ride(ride_id: str, background_tasks: BackgroundTasks, user: User = Dep
         raise
     prev = ride.status
     ride.status = "enroute"
-    ride.started_at = datetime.utcnow()
+    ride.started_at = datetime.now(timezone.utc)
     db.flush()
     _count_transition(prev, ride.status)
     # Observe ETA pickup error if we have predicted and accepted_at
@@ -801,7 +801,7 @@ def complete_ride(
             raise
         prev = ride.status
         ride.status = "completed"
-        ride.completed_at = datetime.utcnow()
+        ride.completed_at = datetime.now(timezone.utc)
         # For MVP final fare equals quote
         ride.final_fare_cents = ride.quoted_fare_cents
         drv.status = "available"
@@ -1239,7 +1239,7 @@ def reassign_stale(
     from datetime import datetime, timedelta
     if settings.ENV != "dev":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
-    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     candidates = (
         db.query(Ride)
         .filter(Ride.created_at <= cutoff)
@@ -1333,7 +1333,7 @@ def reap_timeouts(
     acc_to = int(accept_timeout_secs or getattr(settings, "ASSIGNMENT_ACCEPT_TIMEOUT_SECS", 120))
     lim = int(limit or getattr(settings, "REASSIGN_SCAN_LIMIT", 200))
     relax = bool(relax_wallet if relax_wallet is not None else getattr(settings, "REASSIGN_RELAX_WALLET", False))
-    cutoff = datetime.utcnow() - timedelta(seconds=acc_to)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=acc_to)
     q = (
         db.query(Ride)
         .filter(Ride.created_at <= cutoff)
@@ -1397,7 +1397,7 @@ def reap_start_timeouts(
     st_to = int(start_timeout_secs or getattr(settings, "ACCEPTED_START_TIMEOUT_SECS", 300))
     lim = int(limit or getattr(settings, "REASSIGN_SCAN_LIMIT", 200))
     relax = bool(relax_wallet if relax_wallet is not None else getattr(settings, "REASSIGN_RELAX_WALLET", False))
-    cutoff = datetime.utcnow() - timedelta(seconds=st_to)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=st_to)
     q = (
         db.query(Ride)
         .filter(Ride.status == "accepted")

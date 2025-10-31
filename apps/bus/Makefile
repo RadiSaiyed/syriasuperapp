@@ -17,6 +17,18 @@ db:
 down:
 	$(compose) down -v
 
+# --- DB Migrations ---
+.PHONY: migrate revision
+
+# Run Alembic migrations to head inside the container
+migrate:
+	$(compose) run --rm --entrypoint "" api bash -lc 'alembic upgrade head'
+
+# Create a new autogenerate revision (usage: make revision m="add feature")
+revision:
+	@[ -n "$(m)" ] || (echo "Usage: make revision m=\"message\"" && exit 1)
+	$(compose) run --rm --entrypoint "" api bash -lc 'alembic revision --autogenerate -m "$(m)"'
+
 # --- Testing helpers ---
 test-container:
 	@echo "[tests] Reset DB volume and run pytest in container...";

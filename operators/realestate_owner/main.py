@@ -1,6 +1,14 @@
 from fastapi import FastAPI, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+try:
+    from starlette.middleware.forwarded import ForwardedMiddleware as _ForwardedOrProxy
+except Exception:
+    try:
+        from starlette.middleware.proxy_headers import ProxyHeadersMiddleware as _ForwardedOrProxy
+    except Exception:
+        _ForwardedOrProxy = None  # type: ignore
 from sqlalchemy import text
 
 # Import Realestate domain pieces via PYTHONPATH=apps/realestate
@@ -10,9 +18,10 @@ from app.models import Base
 from app.routers import owner as owner_router
 from app.auth import ensure_user, _make_token, _verify_dev_otp
 from app.schemas import TokenOut, RequestOtpIn, VerifyOtpIn
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import PlainTextResponse
+from operators._shared.common import SecurityHeadersMiddleware, init_tracing
 import os
 try:
     import sentry_sdk
@@ -52,16 +61,26 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["health"])
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
+    LAT = Histogram(
+        "http_request_duration_seconds",
+        "Request duration",
+        ["method", "path"],
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+    )
 
     @app.middleware("http")
     async def _metrics_mw(request, call_next):
-        response = await call_next(request)
+        route = request.scope.get("route")
+        path_tmpl = getattr(route, "path", request.url.path)
+        method = request.method
+        with LAT.labels(method, path_tmpl).time():
+            response = await call_next(request)
         try:
-            REQ.labels(request.method, request.url.path, str(response.status_code)).inc()
+            REQ.labels(method, path_tmpl, str(response.status_code)).inc()
         except Exception:
             pass
         return response
@@ -69,6 +88,20 @@ def create_app() -> FastAPI:
     @app.get("/metrics", include_in_schema=False)
     def metrics():
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    # Security headers + tracing
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.add_middleware(SecurityHeadersMiddleware)
+    init_tracing(app, default_name="realestate_owner")
+
+    # Trusted hosts + forwarded headers
+    allowed_hosts = getattr(settings, "ALLOWED_HOSTS", None) or (["*"] if settings.ENV != "prod" else ["api.example.com"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    proxy_trusted = getattr(settings, "PROXY_TRUSTED_IPS", None)
+    if proxy_trusted and _ForwardedOrProxy:
+        try:
+            app.add_middleware(_ForwardedOrProxy, trusted_hosts=proxy_trusted)
+        except Exception:
+            pass
 
     # OpenAPI: add global HTTP Bearer scheme
     def custom_openapi():
@@ -91,11 +124,16 @@ def create_app() -> FastAPI:
         security_schemes["HTTPBearer"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
         openapi_schema["security"] = [{"HTTPBearer": []}]
         openapi_schema["tags"] = tags_meta
-        # Public auth + health/info endpoints unauthenticated
-        no_auth_paths = ["/health", "/auth/request_otp", "/auth/verify_otp", "/openapi.yaml", "/info"]
-        for p in no_auth_paths:
-            if p in openapi_schema.get("paths", {}):
-                for op in openapi_schema["paths"][p].values():
+        # Public endpoints unauthenticated
+        no_auth_paths = {
+            "/", "/docs", "/openapi.json", "/openapi.yaml",
+            "/metrics", "/ui", "/health", "/health/deps", "/info",
+            "/auth/request_otp", "/auth/verify_otp", 
+            "/auth/dev_login_operator",
+        }
+        for p, ops in openapi_schema.get("paths", {}).items():
+            if p in no_auth_paths:
+                for op in ops.values():
                     op["security"] = []
         app.openapi_schema = openapi_schema
         return app.openapi_schema
@@ -162,8 +200,8 @@ def create_app() -> FastAPI:
     def me(user = Depends(get_current_user), db = Depends(get_db)):
         listings = db.query(Listing).filter(Listing.owner_phone == user.phone).count()
         resv = db.query(Reservation).filter(Reservation.owner_phone == user.phone).count()
-        from datetime import datetime, timedelta
-        now = datetime.utcnow(); since7 = now - timedelta(days=7); since30 = now - timedelta(days=30)
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc); since7 = now - timedelta(days=7); since30 = now - timedelta(days=30)
         l7 = db.query(Listing).filter(Listing.owner_phone == user.phone).filter(Listing.created_at >= since7).count()
         l30 = db.query(Listing).filter(Listing.owner_phone == user.phone).filter(Listing.created_at >= since30).count()
         r7 = db.query(Reservation).filter(Reservation.owner_phone == user.phone, Reservation.created_at >= since7).count()
@@ -196,6 +234,8 @@ def create_app() -> FastAPI:
 
     @app.get("/ui", include_in_schema=False)
     def ui():
+        import secrets
+        nonce = secrets.token_urlsafe(16)
         html = f"""
 <!doctype html>
 <meta charset=\"utf-8\">
@@ -237,7 +277,7 @@ def create_app() -> FastAPI:
     <pre id=\"oout\"></pre>
   </div>
 </div>
-<script>
+<script nonce=\"{nonce}\">
 const out=document.getElementById('out');
 const oout=document.getElementById('oout');
 function auth(json=false){ const t=document.getElementById('tok').value.trim(); const h=t?{Authorization:'Bearer '+t}:{ }; if(json) h['Content-Type']='application/json'; return h; }
@@ -251,7 +291,12 @@ async function reservations(){ const r=await fetch('/owner/reservations',{header
 async function decide(){ const id=document.getElementById('rid').value.trim(); const body=new URLSearchParams(); body.append('decision', document.getElementById('dec').value); const r=await fetch('/owner/reservations/'+id+'/decision',{method:'POST', headers:auth(), body}); oout.textContent=await r.text(); }
 </script>
 """
-        return PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        resp = PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        try:
+            resp.headers["Content-Security-Policy"] = f"script-src 'self' 'nonce-{nonce}'"
+        except Exception:
+            pass
+        return resp
     return app
 
 

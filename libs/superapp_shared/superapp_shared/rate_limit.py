@@ -14,12 +14,13 @@ except Exception:  # pragma: no cover
 
 
 class SlidingWindowLimiter(BaseHTTPMiddleware):
-    def __init__(self, app, limit_per_minute: int = 60, auth_boost: int = 2, exempt_otp: bool = True):
+    def __init__(self, app, limit_per_minute: int = 60, auth_boost: int = 2, exempt_otp: bool = True, exclude_paths: Optional[list[str]] = None):
         super().__init__(app)
         self.window_seconds = 60
         self.limit_per_minute = limit_per_minute
         self.auth_boost = auth_boost
         self.exempt_otp = exempt_otp
+        self.exclude_paths = set(exclude_paths or [])
         self.store: Dict[str, Deque[float]] = defaultdict(deque)
 
     def _key(self, request: Request) -> str:
@@ -31,8 +32,8 @@ class SlidingWindowLimiter(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        # Always bypass limiter for health checks to ensure constant-time responses
-        if path == "/health":
+        # Always bypass limiter for health checks and explicitly excluded paths
+        if path == "/health" or path in self.exclude_paths:
             return await call_next(request)
         now = time.time()
         key = self._key(request)
@@ -65,13 +66,14 @@ class SlidingWindowLimiter(BaseHTTPMiddleware):
 
 
 class RedisRateLimiter(BaseHTTPMiddleware):
-    def __init__(self, app, redis_url: str, limit_per_minute: int = 60, auth_boost: int = 2, prefix: str = "ratelimit", exempt_otp: bool = True):
+    def __init__(self, app, redis_url: str, limit_per_minute: int = 60, auth_boost: int = 2, prefix: str = "ratelimit", exempt_otp: bool = True, exclude_paths: Optional[list[str]] = None):
         super().__init__(app)
         self.redis = self._connect(redis_url)
         self.limit_per_minute = limit_per_minute
         self.auth_boost = auth_boost
         self.prefix = prefix
         self.exempt_otp = exempt_otp
+        self.exclude_paths = set(exclude_paths or [])
 
     def _connect(self, url: str):
         if redis is None:
@@ -90,8 +92,8 @@ class RedisRateLimiter(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        # Always bypass limiter for health checks to ensure constant-time responses
-        if path == "/health":
+        # Always bypass limiter for health checks and explicitly excluded paths
+        if path == "/health" or path in self.exclude_paths:
             return await call_next(request)
         try:
             base = int(os.getenv("RL_LIMIT_PER_MINUTE_OVERRIDE", str(self.limit_per_minute)))

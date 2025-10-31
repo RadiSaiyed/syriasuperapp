@@ -1,7 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Body
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..auth import get_db, get_current_user
 from ..config import settings
@@ -136,7 +136,7 @@ def webhook_ride_status(
     ride = db.get(Ride, d.ride_id)
     if ride is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ride_not_found")
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     status_in = payload.status.lower()
     if status_in == "accepted":
         if ride.status in ("requested", "assigned"):
@@ -183,7 +183,7 @@ def webhook_driver_location(
         else:
             loc.lat = payload.lat
             loc.lon = payload.lon
-            loc.updated_at = datetime.utcnow()
+            loc.updated_at = datetime.now(timezone.utc)
         db.flush()
         return {"detail": "ok"}
     # no mapping — accept but do nothing

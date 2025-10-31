@@ -15,7 +15,7 @@ bearer_scheme = HTTPBearer(auto_error=True)
 
 
 def create_access_token(user_id: str, phone: str) -> str:
-    now = dt.datetime.utcnow()
+    now = dt.datetime.now(dt.timezone.utc)
     payload = {
         "sub": user_id,
         "phone": phone,

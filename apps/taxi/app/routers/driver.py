@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -60,12 +60,12 @@ def update_location(payload: DriverLocationIn, user: User = Depends(get_current_
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="driver_suspended")
     loc = db.query(DriverLocation).filter(DriverLocation.driver_id == drv.id).one_or_none()
     if loc is None:
-        loc = DriverLocation(driver_id=drv.id, lat=payload.lat, lon=payload.lon, updated_at=datetime.utcnow())
+        loc = DriverLocation(driver_id=drv.id, lat=payload.lat, lon=payload.lon, updated_at=datetime.now(timezone.utc))
         db.add(loc)
     else:
         loc.lat = payload.lat
         loc.lon = payload.lon
-        loc.updated_at = datetime.utcnow()
+        loc.updated_at = datetime.now(timezone.utc)
     db.flush()
     # Broadcast to rider if driver has an active ride (assigned/accepted/enroute)
     active = (
@@ -83,7 +83,7 @@ def update_location(payload: DriverLocationIn, user: User = Depends(get_current_
                 "ride_id": str(active.id),
                 "lat": payload.lat,
                 "lon": payload.lon,
-                "ts": _dt.datetime.utcnow().isoformat() + "Z",
+                "ts": _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z"),
             }
             # fire and forget
             import anyio
@@ -101,7 +101,7 @@ def update_location(payload: DriverLocationIn, user: User = Depends(get_current_
                 "driver_id": str(drv.id),
                 "lat": payload.lat,
                 "lon": payload.lon,
-                "ts": datetime.utcnow().isoformat() + "Z",
+                "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
             msgs = [(f"{topic_pref}/driver/{drv.id}/location", json.dumps(base_payload), 0, False)]
             if active is not None:
@@ -149,10 +149,10 @@ def get_profile(user: User = Depends(get_current_user), db: Session = Depends(ge
 @router.get("/earnings")
 def get_earnings(days: int = 7, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     require_driver(user)
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     if days <= 0:
         days = 7
-    since = datetime.utcnow() - timedelta(days=days)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
     drv = db.query(Driver).filter(Driver.user_id == user.id).one()
     q = db.query(func.coalesce(func.sum(Ride.final_fare_cents), 0)).filter(Ride.driver_id == drv.id).filter(Ride.status == "completed").filter(Ride.completed_at != None).filter(Ride.completed_at >= since)  # noqa: E711
     total_cents = int(q.scalar() or 0)

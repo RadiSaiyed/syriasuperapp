@@ -35,22 +35,36 @@ Endpoints
   - GET  `/v1/push/topic/list` — my topics
   - POST `/v1/push/dev/broadcast_topic` — broadcast to a topic `{topic, title, body, deeplink?}`
 
+Security (JWT)
+- In production, the BFF verifies RS256 JWTs via JWKS exposed by Payments and rejects invalid tokens.
+- Env:
+  - `JWT_JWKS_URL` — defaults to `${PAYMENTS_BASE_URL}/.well-known/jwks.json`
+  - `JWT_ISSUER` / `JWT_AUDIENCE` — optional claims verification
+  - `JWT_ENFORCE` — set `true` to enforce in non‑prod; in prod it is enforced by default
+
 Security (dev push endpoints)
-- Dev endpoints under `/v1/push/dev/*` require admin by default.
-- Set `PUSH_DEV_ALLOW_ALL=true` to relax in non‑prod (not recommended).
+- In production, endpoints unter `/v1/push/dev/*` erfordern Admin‑Tokens.
+- In nicht‑Prod sind sie per Default erlaubt. Setze `PUSH_DEV_ALLOW_ALL=false`, um auch in dev/stage zu sperren.
 - Admin detection checks token claims: `role` in {admin, owner, operator, ops}, `is_admin=true`, or permissions/scopes include `admin`/`push:admin`/`push:send`.
 - Allowlists are supported via env:
   - `PUSH_DEV_ALLOWED_PHONES` — comma‑separated phone list
   - `PUSH_DEV_ALLOWED_SUBS` — comma‑separated user ids
-  - `PUSH_DEV_ALLOW_ALL` — default true for non‑prod; set to false to always require admin
+  - `PUSH_DEV_ALLOW_ALL` — default false; set to true to allow any authenticated user in non‑prod
+
+Topics gating (optional)
+- Set `PUSH_TOPICS_ALLOW_ALL=false` to require admin (or allowlist) for subscribe/unsubscribe in all environments. Default is true to allow normal users.
+- Allowlists (topics): `PUSH_TOPICS_ALLOWED_PHONES` (comma‑separated), `PUSH_TOPICS_ALLOWED_SUBS` (user ids). Admin override still applies.
 
 Config
 - APP_ENV — string in health response (default dev)
+- ALLOWED_ORIGINS — CORS allowlist (comma‑separated). In prod, wildcard is disabled by default; set explicitly.
 - Upstreams (defaults assume local ports):
   - PAYMENTS_BASE_URL (default http://host.docker.internal:8080)
-  - TAXI_BASE_URL (http://host.docker.internal:8081), BUS_BASE_URL (…:8082), COMMERCE_BASE_URL (…:8083), … up to AI_GATEWAY_BASE_URL (…:8099)
+ - TAXI_BASE_URL (http://host.docker.internal:8081), BUS_BASE_URL (…:8082), COMMERCE_BASE_URL (…:8083), … up to AI_GATEWAY_BASE_URL (…:8099)
  - REDIS_URL — optional; enables Redis‑backed storage for push registrations and topic sets
  - FCM_SERVER_KEY — optional; when provided, dev sends/broadcasts go through FCM
+ - RL_LIMIT_PER_MINUTE — optional per‑IP limit (default 60). Uses Redis minute window when `REDIS_URL` is set; otherwise best‑effort in‑memory bucket.
+ - BFF_FEATURES / BFF_FEATURES_JSON — optional overrides for `/v1/features`.
 
 Run (local)
 - Python: `ENV=dev APP_PORT=8070 python -m apps.bff.app.main`
@@ -61,6 +75,8 @@ Notes
 - The Super‑App client can be pointed to the BFF by setting `SUPERAPP_API_BASE` (e.g., http://localhost:8070). In that mode, all services use path‑based routing via the BFF proxy (`http://localhost:8070/taxi/...`).
 - WebSockets: a lightweight WS proxy exists at `/{service}/ws`. For very high‑throughput chat, direct connections are still an option.
 - ETag/304: Commerce/Stays endpoints include ETag and sane Cache‑Control; the client caches and sends `If-None-Match` to reduce bandwidth and latency.
+ - Security headers: BFF setzt konservative HTTP‑Security‑Header (nosniff, DENY, no‑referrer, restriktive Permissions‑Policy) und `Cache-Control: no-store` für schreibende Requests.
+ - The BFF adds/forwards `X-Request-ID` and `traceparent` headers to upstream services for better observability.
 
 Repository cleanup
 - Per‑service demo Flutter clients were removed in favor of the unified `superapp_flutter` client. A copy is archived under `archive/<timestamp>/clients/` for reference.

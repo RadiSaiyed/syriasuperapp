@@ -86,10 +86,10 @@ def create_suspension(payload: SuspensionIn, db: Session = Depends(get_db), _: N
         if not d:
             raise HTTPException(status_code=404, detail="driver_not_found")
         driver_id = d.id
-    from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
     until = None
     if payload.minutes and payload.minutes > 0:
-        until = datetime.utcnow() + timedelta(minutes=payload.minutes)
+        until = datetime.now(timezone.utc) + timedelta(minutes=payload.minutes)
     s = Suspension(user_id=user_id, driver_id=driver_id, reason=(payload.reason or None), until=until, active=True)
     db.add(s); db.flush()
     return {"id": str(s.id), "active": s.active, "until": s.until.isoformat() + "Z" if s.until else None}

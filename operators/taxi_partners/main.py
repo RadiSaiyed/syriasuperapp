@@ -1,5 +1,13 @@
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+try:
+    from starlette.middleware.forwarded import ForwardedMiddleware as _ForwardedOrProxy
+except Exception:
+    try:
+        from starlette.middleware.proxy_headers import ProxyHeadersMiddleware as _ForwardedOrProxy
+    except Exception:
+        _ForwardedOrProxy = None  # type: ignore
 from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy import text
 
@@ -10,7 +18,7 @@ from app.models import Base
 from app.middleware_request_id import RequestIDMiddleware
 from app.middleware_rate_limit import SlidingWindowLimiter
 from app.middleware_rate_limit_redis import RedisRateLimiter
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import PlainTextResponse
 from superapp_shared.internal_hmac import sign_internal_request_headers
@@ -23,6 +31,7 @@ except Exception:
 
 from app.routers import auth as auth_router
 from app.routers import partners as partners_router
+from operators._shared.common import SecurityHeadersMiddleware, init_tracing
 
 
 def create_app() -> FastAPI:
@@ -45,24 +54,29 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Request ID + JSON logs
+    # Request ID + Security headers + compression
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=500)
 
     # Rate limit
-    if settings.RATE_LIMIT_BACKEND.lower() == "redis":
+    backend = (getattr(settings, "RATE_LIMIT_BACKEND", "") or "").lower()
+    common_excludes = ["/health", "/health/deps", "/metrics", "/info", "/openapi.yaml", "/openapi.json", "/ui", "/docs"]
+    if backend == "redis":
         app.add_middleware(
             RedisRateLimiter,
             redis_url=settings.REDIS_URL,
             limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
             auth_boost=settings.RATE_LIMIT_AUTH_BOOST,
             prefix=settings.RATE_LIMIT_REDIS_PREFIX,
+            exclude_paths=common_excludes,
         )
     else:
         app.add_middleware(
             SlidingWindowLimiter,
             limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
             auth_boost=settings.RATE_LIMIT_AUTH_BOOST,
+            exclude_paths=common_excludes,
         )
 
     if getattr(settings, "AUTO_CREATE_SCHEMA", False):
@@ -74,16 +88,26 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["health"])
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
+    LAT = Histogram(
+        "http_request_duration_seconds",
+        "Request duration",
+        ["method", "path"],
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+    )
 
     @app.middleware("http")
     async def _metrics_mw(request, call_next):
-        response = await call_next(request)
+        route = request.scope.get("route")
+        path_tmpl = getattr(route, "path", request.url.path)
+        method = request.method
+        with LAT.labels(method, path_tmpl).time():
+            response = await call_next(request)
         try:
-            REQ.labels(request.method, request.url.path, str(response.status_code)).inc()
+            REQ.labels(method, path_tmpl, str(response.status_code)).inc()
         except Exception:
             pass
         return response
@@ -91,6 +115,19 @@ def create_app() -> FastAPI:
     @app.get("/metrics", include_in_schema=False)
     def metrics():
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # Initialize tracing if configured
+    init_tracing(app, default_name="taxi_partners")
+
+    # Trusted hosts + forwarded headers
+    allowed_hosts = getattr(settings, "ALLOWED_HOSTS", None) or (["*"] if settings.ENV != "prod" else ["api.example.com"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    proxy_trusted = getattr(settings, "PROXY_TRUSTED_IPS", None)
+    if proxy_trusted and _ForwardedOrProxy:
+        try:
+            app.add_middleware(_ForwardedOrProxy, trusted_hosts=proxy_trusted)
+        except Exception:
+            pass
 
     @app.get("/health/deps", tags=["health"])
     def health_deps():
@@ -136,10 +173,14 @@ def create_app() -> FastAPI:
         openapi_schema["security"] = [{"HTTPBearer": []}]
         openapi_schema["tags"] = tags_meta
         # Allow unauthenticated access to selected endpoints
-        no_auth_paths = ["/health", "/health/deps", "/info", "/openapi.yaml"]
-        for p in no_auth_paths:
-            if p in openapi_schema.get("paths", {}):
-                for op in openapi_schema["paths"][p].values():
+        no_auth_paths = {
+            "/", "/docs", "/openapi.json", "/openapi.yaml",
+            "/metrics", "/ui", "/health", "/health/deps", "/info",
+            "/auth/dev_login_operator",
+        }
+        for p, ops in openapi_schema.get("paths", {}).items():
+            if p in no_auth_paths:
+                for op in ops.values():
                     op["security"] = []
         app.openapi_schema = openapi_schema
         return app.openapi_schema
@@ -176,6 +217,8 @@ def create_app() -> FastAPI:
 
     @app.get("/ui", include_in_schema=False)
     def ui():
+        import secrets
+        nonce = secrets.token_urlsafe(16)
         html = f"""
 <!doctype html>
 <meta charset=\"utf-8\">
@@ -222,7 +265,7 @@ def create_app() -> FastAPI:
     <pre id=\"pout\"></pre>
   </div>
 </div>
-<script>
+<script nonce=\"{nonce}\">
 const out=document.getElementById('out');
 const pout=document.getElementById('pout');
 function auth(json=false){ const t=document.getElementById('tok').value.trim(); const h=t?{Authorization:'Bearer '+t}:{ }; if(json) h['Content-Type']='application/json'; return h; }
@@ -235,7 +278,12 @@ async function sendRideStatus(){ const base=(document.getElementById('taxi_base'
 async function sendDriverLoc(){ const base=(document.getElementById('taxi_base').value||'').trim(); const body={partner_key_id: (document.getElementById('wh_key2').value||document.getElementById('k2').value||''), external_driver_id: document.getElementById('wh_drv').value, lat: parseFloat(document.getElementById('wh_lat').value||'0'), lon: parseFloat(document.getElementById('wh_lon').value||'0'), base: base||null}; const r=await fetch('/dev/sim_webhook/driver_location',{method:'POST', headers:auth(true), body: JSON.stringify(body)}); pout.textContent=await r.text(); }
 </script>
 """
-        return PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        resp = PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        try:
+            resp.headers["Content-Security-Policy"] = f"script-src 'self' 'nonce-{nonce}'"
+        except Exception:
+            pass
+        return resp
     # Dev helper endpoints to simulate HMAC webhooks to Taxi API
     @app.post("/dev/sim_webhook/ride_status", tags=["dev"])
     def sim_ride_status(partner_key_id: str, external_trip_id: str, status: str, final_fare_cents: int | None = None, base: str | None = None, db = Depends(get_db)):

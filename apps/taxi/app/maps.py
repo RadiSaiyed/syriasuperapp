@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 import httpx
 import time
@@ -63,7 +63,7 @@ class GoogleMapsProvider:
         if not ent:
             return None
         exp, val = ent
-        if exp >= datetime.utcnow():
+        if exp >= datetime.now(timezone.utc):
             return val
         self._cache.pop(key, None)
         return None
@@ -71,7 +71,7 @@ class GoogleMapsProvider:
     def _cache_set(self, key: str, value: tuple[float, int, str | None]):
         if self.cache_ttl <= 0:
             return
-        self._cache[key] = (datetime.utcnow() + timedelta(seconds=self.cache_ttl), value)
+        self._cache[key] = (datetime.now(timezone.utc) + timedelta(seconds=self.cache_ttl), value)
 
     def _offline_route(self, points: List[tuple[float, float]]) -> tuple[float, int, str | None]:
         dist = 0.0

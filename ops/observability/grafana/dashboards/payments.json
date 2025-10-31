@@ -115,7 +115,16 @@
       "targets": [
         {"expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"payments\\\"}[5m])))", "refId": "A"},
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\\\"payments\\\"}[5m])))", "refId": "B"}
-      ]
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}, "exemplars": {"display": true}}
+    }
+    ,
+    {
+      "type": "tempo-search",
+      "title": "Recent Traces (payments)",
+      "gridPos": {"x":0, "y": 60, "w":24, "h":10},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "options": {"query": "{ service.name=\"payments\" }", "limit": 100, "direction": "BACKWARD", "spanBar": true}
     }
   ]
 }

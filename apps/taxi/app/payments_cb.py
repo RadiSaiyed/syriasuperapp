@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict
 from prometheus_client import Counter
 from .config import settings
@@ -33,7 +33,7 @@ def allowed(op: str) -> bool:
     if not settings.PAYMENTS_CB_ENABLED:
         return True
     st = _get(op)
-    if st.open_until and datetime.utcnow() < st.open_until:
+    if st.open_until and datetime.now(timezone.utc) < st.open_until:
         try:
             PAY_INT_CALLS.labels(op, "skipped_cb_open").inc()
         except Exception:
@@ -58,12 +58,12 @@ def record(op: str, ok: bool) -> None:
         except Exception:
             pass
         if settings.PAYMENTS_CB_ENABLED and st.fails >= max(1, int(settings.PAYMENTS_CB_THRESHOLD)):
-            st.open_until = datetime.utcnow() + timedelta(seconds=max(1, int(settings.PAYMENTS_CB_COOLDOWN_SECS)))
+            st.open_until = datetime.now(timezone.utc) + timedelta(seconds=max(1, int(settings.PAYMENTS_CB_COOLDOWN_SECS)))
 
 
 def snapshot() -> Dict[str, dict]:
     out: Dict[str, dict] = {}
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for k, v in _STATES.items():
         out[k] = {
             "fails": v.fails,

@@ -209,7 +209,7 @@ def create_auction(payload: AuctionCreateIn, user: User = Depends(get_current_us
         ends_at = dt.datetime.fromisoformat(payload.ends_at_iso.replace("Z", "+00:00")).replace(tzinfo=None)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid ends_at_iso")
-    if ends_at <= dt.datetime.utcnow():
+    if ends_at <= dt.datetime.now(dt.timezone.utc):
         raise HTTPException(status_code=400, detail="ends_at must be in future")
     if a.status != "available":
         raise HTTPException(status_code=400, detail="Animal not available")

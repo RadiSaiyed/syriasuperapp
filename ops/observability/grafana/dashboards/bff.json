@@ -28,8 +28,17 @@
         {"expr": "histogram_quantile(0.5, sum(rate(bff_request_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p50"},
         {"expr": "histogram_quantile(0.9, sum(rate(bff_request_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p90"},
         {"expr": "histogram_quantile(0.99, sum(rate(bff_request_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p99"}
-      ]
+      ],
+      "options": {"legend": {"show": true}},
+      "exemplars": true
+    }
+    ,
+    {
+      "type": "tempo-search",
+      "title": "Recent Traces (bff)",
+      "gridPos": {"x":0, "y":16, "w":24, "h":10},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "options": {"query": "{ service.name=\"bff\" }", "limit": 100, "direction": "BACKWARD", "spanBar": true}
     }
   ]
 }
-

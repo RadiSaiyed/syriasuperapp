@@ -1,5 +1,13 @@
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+try:
+    from starlette.middleware.forwarded import ForwardedMiddleware as _ForwardedOrProxy
+except Exception:
+    try:
+        from starlette.middleware.proxy_headers import ProxyHeadersMiddleware as _ForwardedOrProxy
+    except Exception:
+        _ForwardedOrProxy = None  # type: ignore
 from sqlalchemy import text
 
 from .config import settings
@@ -34,20 +42,33 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(RequestIDMiddleware)
+    # Trusted hosts + forwarded headers
+    allowed_hosts = getattr(settings, "ALLOWED_HOSTS", None) or (["*"] if settings.ENV != "prod" else ["api.example.com"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    proxy_trusted = getattr(settings, "PROXY_TRUSTED_IPS", None)
+    if proxy_trusted and _ForwardedOrProxy:
+        try:
+            app.add_middleware(_ForwardedOrProxy, trusted_hosts=proxy_trusted)
+        except Exception:
+            pass
 
-    if settings.RATE_LIMIT_BACKEND.lower() == "redis":
+    backend = (getattr(settings, "RATE_LIMIT_BACKEND", "") or "").lower()
+    common_excludes = ["/health", "/health/deps", "/metrics", "/info", "/openapi.yaml", "/openapi.json", "/ui", "/docs"]
+    if backend == "redis":
         app.add_middleware(
             RedisRateLimiter,
             redis_url=settings.REDIS_URL,
             limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
             auth_boost=settings.RATE_LIMIT_AUTH_BOOST,
             prefix=settings.RATE_LIMIT_REDIS_PREFIX,
+            exclude_paths=common_excludes,
         )
     else:
         app.add_middleware(
             SlidingWindowLimiter,
             limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
             auth_boost=settings.RATE_LIMIT_AUTH_BOOST,
+            exclude_paths=common_excludes,
         )
 
     if settings.AUTO_CREATE_SCHEMA:
@@ -56,7 +77,7 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])

@@ -1,6 +1,14 @@
 from fastapi import FastAPI, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+try:
+    from starlette.middleware.forwarded import ForwardedMiddleware as _ForwardedOrProxy
+except Exception:
+    try:
+        from starlette.middleware.proxy_headers import ProxyHeadersMiddleware as _ForwardedOrProxy
+    except Exception:
+        _ForwardedOrProxy = None  # type: ignore
 from sqlalchemy import text
 
 # Import Agriculture domain via PYTHONPATH=apps/agriculture
@@ -9,9 +17,10 @@ from app.database import engine
 from app.models import Base
 from app.middleware_request_id import RequestIDMiddleware
 from app.middleware_rate_limit import SlidingWindowLimiter, RedisRateLimiter
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import PlainTextResponse
+from operators._shared.common import SecurityHeadersMiddleware, init_tracing
 import os
 try:
     import sentry_sdk
@@ -46,7 +55,18 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=500)
+
+    # Trusted hosts + forwarded headers
+    allowed_hosts = getattr(settings, "ALLOWED_HOSTS", None) or (["*"] if settings.ENV != "prod" else ["api.example.com"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    proxy_trusted = getattr(settings, "PROXY_TRUSTED_IPS", None)
+    if proxy_trusted and _ForwardedOrProxy:
+        try:
+            app.add_middleware(_ForwardedOrProxy, trusted_hosts=proxy_trusted)
+        except Exception:
+            pass
 
     if settings.RATE_LIMIT_BACKEND == "redis":
         app.add_middleware(
@@ -73,16 +93,26 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["health"])
     def health():
         with engine.connect() as conn:
-            conn.execute(text("select 1"))
+            conn.exec_driver_sql("SELECT 1")
         return {"status": "ok", "env": settings.ENV}
 
     REQ = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
+    LAT = Histogram(
+        "http_request_duration_seconds",
+        "Request duration",
+        ["method", "path"],
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+    )
 
     @app.middleware("http")
     async def _metrics_mw(request, call_next):
-        response = await call_next(request)
+        route = request.scope.get("route")
+        path_tmpl = getattr(route, "path", request.url.path)
+        method = request.method
+        with LAT.labels(method, path_tmpl).time():
+            response = await call_next(request)
         try:
-            REQ.labels(request.method, request.url.path, str(response.status_code)).inc()
+            REQ.labels(method, path_tmpl, str(response.status_code)).inc()
         except Exception:
             pass
         return response
@@ -90,6 +120,9 @@ def create_app() -> FastAPI:
     @app.get("/metrics", include_in_schema=False)
     def metrics():
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # Initialize tracing if configured
+    init_tracing(app, default_name="agriculture_farmer")
 
     # OpenAPI: add global HTTP Bearer scheme
     def custom_openapi():
@@ -112,10 +145,14 @@ def create_app() -> FastAPI:
         security_schemes["HTTPBearer"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
         openapi_schema["security"] = [{"HTTPBearer": []}]
         openapi_schema["tags"] = tags_meta
-        no_auth_paths = ["/health", "/health/deps", "/info", "/openapi.yaml"]
-        for p in no_auth_paths:
-            if p in openapi_schema.get("paths", {}):
-                for op in openapi_schema["paths"][p].values():
+        no_auth_paths = {
+            "/", "/docs", "/openapi.json", "/openapi.yaml",
+            "/metrics", "/ui", "/health", "/health/deps", "/info",
+            "/auth/dev_login_operator",
+        }
+        for p, ops in openapi_schema.get("paths", {}).items():
+            if p in no_auth_paths:
+                for op in ops.values():
                     op["security"] = []
         app.openapi_schema = openapi_schema
         return app.openapi_schema
@@ -233,7 +270,15 @@ async function setAppStatus(){ const id=document.getElementById('appid').value.t
 async function listOrders(){ const r=await fetch('/farmer/orders',{headers:auth()}); fout.textContent=await r.text(); }
 </script>
 """
-        return PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        import secrets
+        nonce = secrets.token_urlsafe(16)
+        html = html.replace("<script>", f"<script nonce=\"{nonce}\">", 1)
+        resp = PlainTextResponse(html, media_type="text/html; charset=utf-8")
+        try:
+            resp.headers["Content-Security-Policy"] = f"script-src 'self' 'nonce-{nonce}'"
+        except Exception:
+            pass
+        return resp
     
     @app.get("/", include_in_schema=False)
     def root():
@@ -259,8 +304,8 @@ async function listOrders(){ const r=await fetch('/farmer/orders',{headers:auth(
             listing_ids = [l.id for l in db.query(Listing).filter(Listing.farm_id == farm.id).all()]
             if listing_ids:
                 orders = db.query(Order).filter(Order.listing_id.in_(listing_ids)).count()
-        from datetime import datetime, timedelta
-        now = datetime.utcnow(); since7 = now - timedelta(days=7); since30 = now - timedelta(days=30)
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc); since7 = now - timedelta(days=7); since30 = now - timedelta(days=30)
         o7 = o30 = 0
         if farm:
             if listing_ids:

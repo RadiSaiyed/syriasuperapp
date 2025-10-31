@@ -1,0 +1,32 @@
+{
+  "title": "Tracing Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "type": "constant",
+        "name": "service",
+        "label": "Service",
+        "query": "payments",
+        "current": {"text": "payments", "value": "payments"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "tempo-search",
+      "title": "Traces (service.name=$service)",
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 0},
+      "options": {
+        "query": "{ service.name=\"$service\" }",
+        "limit": 100,
+        "direction": "BACKWARD",
+        "spanBar": true
+      },
+      "datasource": {"type": "tempo", "uid": "tempo"}
+    }
+  ]
+}
+

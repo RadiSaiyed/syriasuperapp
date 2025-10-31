@@ -40,10 +40,10 @@ PY
 
 echo "[entrypoint] Running Alembic migrations..."
 if ! alembic upgrade head; then
-  echo "[entrypoint] Alembic migration failed; continuing to start app" >&2
+  echo "[entrypoint] Alembic migration failed; attempting to stamp head (DB likely precreated)" >&2
+  alembic stamp head || echo "[entrypoint] Alembic stamp head failed; continuing anyway" >&2
 fi
 fi
 
 echo "[entrypoint] Starting API server..."
 exec uvicorn app.main:app --host 0.0.0.0 --port 8082
-

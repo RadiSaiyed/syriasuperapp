@@ -103,6 +103,13 @@ fi
 
 echo "[health] All backend tests passed."
 
+# Optional: run Payments ledger reconciliation as an extra safety check
+if [ -f "apps/payments/scripts/reconcile.py" ]; then
+  echo "[health] Running Payments ledger reconciliation (dry-run)"
+  export DB_URL="postgresql+psycopg2://postgres:postgres@localhost:${PG_PORT}/payments"
+  $PY_BIN apps/payments/scripts/reconcile.py || true
+fi
+
 # Cleanup ephemeral Postgres if we started it
 if docker ps --format '{{.Names}}' | grep -q '^health-postgres$'; then
   docker rm -f health-postgres >/dev/null 2>&1 || true

@@ -42,6 +42,7 @@ import 'animations.dart';
 import 'haptics.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 // duplicates removed
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'auth.dart';
@@ -444,6 +445,26 @@ class SuperApp extends StatelessWidget {
               title: 'Super‑App',
               themeMode: themeMode,
               locale: appLocale,
+              supportedLocales: const [
+                Locale('en'),
+                Locale('ar'),
+              ],
+              localizationsDelegates: const [
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              localeResolutionCallback: (deviceLocale, supported) {
+                if (appLocale != null) return appLocale;
+                if (deviceLocale != null) {
+                  for (final loc in supported) {
+                    if (loc.languageCode == deviceLocale.languageCode) {
+                      return deviceLocale;
+                    }
+                  }
+                }
+                return const Locale('en');
+              },
               theme: lightTheme,
               darkTheme: darkTheme,
               scaffoldMessengerKey: MessageHost.messengerKey,

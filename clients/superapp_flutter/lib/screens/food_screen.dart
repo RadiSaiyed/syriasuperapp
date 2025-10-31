@@ -513,7 +513,6 @@ class _FoodScreenState extends State<FoodScreen> {
   }
 
   Future<void> _listReviews(String rid) async {
-    final headers = await _foodHeaders();
     setState(() { _loading = true; _reviews = []; _selectedRestaurantId = rid; });
     try {
       final js = await serviceGetJson(

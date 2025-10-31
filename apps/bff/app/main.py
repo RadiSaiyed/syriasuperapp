@@ -1,5 +1,6 @@
 import os
 import time
+import random
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -16,6 +17,11 @@ try:
 except Exception:  # pragma: no cover
     redis = None
 
+try:  # Optional JWT verification (RS256 via JWKS)
+    from superapp_shared.jwks_verify import decode_with_jwks as _jwks_decode
+except Exception:  # pragma: no cover
+    _jwks_decode = None
+
 
 APP_ENV = os.getenv("APP_ENV", "dev")
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
@@ -24,6 +30,19 @@ APP_PORT = int(os.getenv("APP_PORT", "8070"))
 PAYMENTS_BASE_URL = os.getenv("PAYMENTS_BASE_URL", "http://host.docker.internal:8080")
 REDIS_URL = os.getenv("REDIS_URL", "")
 FCM_SERVER_KEY = os.getenv("FCM_SERVER_KEY", "")
+
+# JWT (RS256) verification defaults to enforced in prod
+JWT_JWKS_URL = os.getenv("JWT_JWKS_URL", f"{PAYMENTS_BASE_URL}/.well-known/jwks.json")
+JWT_ISSUER = os.getenv("JWT_ISSUER") or None
+JWT_AUDIENCE = os.getenv("JWT_AUDIENCE") or None
+JWT_ENFORCE = (os.getenv("JWT_ENFORCE", "false").lower() == "true") or (APP_ENV == "prod")
+
+# CORS configuration (safer in prod)
+_ALLOWED_ORIGINS_ENV = os.getenv("ALLOWED_ORIGINS") or os.getenv("COMMON_ALLOWED_ORIGINS") or ""
+if _ALLOWED_ORIGINS_ENV.strip():
+    ALLOWED_ORIGINS = [s.strip() for s in _ALLOWED_ORIGINS_ENV.split(",") if s.strip()]
+else:
+    ALLOWED_ORIGINS = ["*"] if APP_ENV != "prod" else []
 
 # Upstream bases for path-based proxying (/<service>/...)
 DEFAULT_BASES = {
@@ -58,7 +77,40 @@ class Feature(BaseModel):
     order: int | None = None
 
 
+def _features_from_env() -> Optional[List[Feature]]:
+    raw = os.getenv("BFF_FEATURES_JSON", "").strip()
+    if raw:
+        try:
+            arr = pyjson.loads(raw)
+            out: List[Feature] = []
+            for idx, it in enumerate(arr):
+                fid = str(it.get("id"))
+                title = str(it.get("title", fid))
+                en = bool(it.get("enabled", True))
+                out.append(Feature(id=fid, title=title, enabled=en, order=idx))
+            return out
+        except Exception:
+            pass
+    csv = os.getenv("BFF_FEATURES", "").strip()
+    if csv:
+        out2: List[Feature] = []
+        for idx, part in enumerate(csv.split(",")):
+            part = part.strip()
+            if not part:
+                continue
+            if ":" in part:
+                fid, title = part.split(":", 1)
+            else:
+                fid, title = part, part.capitalize()
+            out2.append(Feature(id=fid.strip(), title=title.strip(), enabled=True, order=idx))
+        return out2
+    return None
+
+
 def default_features() -> List[Feature]:
+    envf = _features_from_env()
+    if envf is not None:
+        return envf
     ids = [
         ("payments", "Payments"),
         ("taxi", "Taxi"),
@@ -87,11 +139,43 @@ def default_features() -> List[Feature]:
 app = FastAPI(title="Super‑App BFF", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- OpenTelemetry (optional; enabled when exporter endpoint present) ---
+def _init_tracing_once() -> None:
+    try:
+        if getattr(app.state, "_otel_init", False):
+            return
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip() or "http://localhost:4318"
+        service_name = os.getenv("OTEL_SERVICE_NAME", "bff")
+        # Lazy import to avoid test overhead when unused
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+        resource = Resource.create({
+            "service.name": service_name,
+            "deployment.environment": APP_ENV,
+        })
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces")
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        # Instrument frameworks
+        FastAPIInstrumentor.instrument_app(app)
+        HTTPXClientInstrumentor().instrument()
+        app.state._otel_init = True
+    except Exception:
+        # fail-open; tracing optional
+        app.state._otel_init = True
 
 # Prometheus metrics (initialized on startup to avoid duplicate registration)
 REQ_COUNTER = None
@@ -105,33 +189,57 @@ REDIS: Optional["redis.Redis"] = None
 
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
-    # Simple in-memory token-bucket rate limit per IP (best-effort)
+    # Generate/propagate a request ID
+    try:
+        rid = request.headers.get("x-request-id") or _gen_request_id()
+    except Exception:
+        rid = None
+    if rid:
+        setattr(request.state, "request_id", rid)
+
+    # Simple rate-limit per IP (Redis minute window if available; else in-memory bucket)
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
-    if not hasattr(app.state, "_rl"):
-        app.state._rl = {}
-    b = app.state._rl.get(ip)
     now = time.time()
-    cap = 60  # 60 tokens
-    rate = 1.0  # refill per second
-    if not b:
-        b = {"t": now, "tokens": cap}
-    else:
-        delta = now - b["t"]
-        b["tokens"] = min(cap, b["tokens"] + delta * rate)
-        b["t"] = now
-    need = 1
-    if request.url.path.startswith("/metrics"):
-        need = 0
-    if b["tokens"] < need:
+    need = 0 if request.url.path.startswith("/metrics") else 1
+    limited = False
+    if need:
+        if REDIS is not None:
+            try:
+                minute = int(now // 60)
+                limit = int(os.getenv("RL_LIMIT_PER_MINUTE", "60"))
+                key = f"bff:rl:{ip}:{minute}"
+                val = await REDIS.incr(key)
+                if val == 1:
+                    await REDIS.expire(key, 65)
+                if val > limit:
+                    limited = True
+            except Exception:
+                limited = False
+        else:
+            if not hasattr(app.state, "_rl"):
+                app.state._rl = {}
+            b = app.state._rl.get(ip)
+            cap = 60
+            rate = 1.0
+            if not b:
+                b = {"t": now, "tokens": cap}
+            else:
+                delta = now - b["t"]
+                b["tokens"] = min(cap, b["tokens"] + delta * rate)
+                b["t"] = now
+            if b["tokens"] < need:
+                limited = True
+            else:
+                b["tokens"] -= need
+            app.state._rl[ip] = b
+    if limited:
         try:
-            getattr(app.state, "REQ_COUNTER").labels(request.method, request.url.path, "429").inc()
+            getattr(app.state, "REQ_COUNTER").labels(request.method, _metrics_path_label(request), "429").inc()
         except Exception:
             pass
         return Response(status_code=429, content="rate limited")
-    b["tokens"] -= need
-    app.state._rl[ip] = b
 
-    path_t = request.url.path
+    path_t = _metrics_path_label(request)
     method = request.method
     start = time.perf_counter()
     try:
@@ -141,7 +249,24 @@ async def metrics_middleware(request: Request, call_next):
         dur = time.perf_counter() - start
         status = str(getattr(request.state, "_status_code", getattr(locals().get("response", Response()), "status_code", 0)))
         try:
-            getattr(app.state, "LAT_HIST").labels(method, path_t).observe(dur)
+            # Try to attach exemplar with current trace_id if available
+            exemplar = None
+            try:
+                from opentelemetry import trace as _trace  # type: ignore
+                ctx = _trace.get_current_span().get_span_context()
+                if getattr(ctx, "trace_id", 0):
+                    tid = f"{ctx.trace_id:032x}"
+                    exemplar = {"trace_id": tid}
+            except Exception:
+                exemplar = None
+            h = getattr(app.state, "LAT_HIST")
+            if exemplar:
+                try:
+                    h.labels(method, path_t).observe(dur, exemplar=exemplar)  # type: ignore[call-arg]
+                except Exception:
+                    h.labels(method, path_t).observe(dur)
+            else:
+                h.labels(method, path_t).observe(dur)
             getattr(app.state, "REQ_COUNTER").labels(method, path_t, status).inc()
         except Exception:
             pass
@@ -150,6 +275,26 @@ async def metrics_middleware(request: Request, call_next):
 @app.get("/metrics")
 def metrics():
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp: Response = await call_next(request)
+    try:
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault(
+            "Permissions-Policy",
+            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+        )
+        if request.method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+            resp.headers.setdefault("Cache-Control", "no-store")
+        else:
+            resp.headers.setdefault("Cache-Control", "no-cache, max-age=0")
+    except Exception:
+        pass
+    return resp
 
 
 """
@@ -234,6 +379,8 @@ async def bff_auth_verify_otp(request: Request) -> Response:
 
 @app.on_event("startup")
 async def on_startup():
+    # Initialize tracing if configured
+    _init_tracing_once()
     global REDIS
     # Initialize metrics once
     if not hasattr(app.state, "REQ_COUNTER"):
@@ -265,6 +412,8 @@ async def register_push(request: Request, authorization: str | None = Header(def
     headers = _auth_headers(authorization)
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
+    # Enforce JWT validity in prod (configurable)
+    _ensure_valid_bearer(headers.get("Authorization", ""))
     try:
         data = await request.json()
     except Exception:
@@ -308,10 +457,32 @@ def _decode_payload_from_bearer(authz: str) -> Optional[dict]:
         return None
 
 
+def _verify_bearer_payload(authz: str) -> Optional[dict]:
+    # In dev/non-enforced mode, accept best-effort decoded payload
+    if not JWT_ENFORCE:
+        return _decode_payload_from_bearer(authz)
+    if not _jwks_decode or not JWT_JWKS_URL:
+        if APP_ENV != "prod":
+            return _decode_payload_from_bearer(authz)
+        raise HTTPException(status_code=401, detail="token verification unavailable")
+    try:
+        raw = authz.split()[1]
+        return _jwks_decode(raw, JWT_JWKS_URL, audience=JWT_AUDIENCE, issuer=JWT_ISSUER)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"invalid token: {e}")
+
+
+def _ensure_valid_bearer(authz: str) -> dict:
+    p = _verify_bearer_payload(authz)
+    if not isinstance(p, dict):
+        raise HTTPException(status_code=401, detail="invalid token")
+    return p
+
+
 def _is_admin_token(authz: str) -> bool:
     # Admin if token claims include role/is_admin/permissions/scopes
     try:
-        p = _decode_payload_from_bearer(authz) or {}
+        p = _verify_bearer_payload(authz) or {}
         role = str(p.get("role", "")).lower()
         if role in {"admin", "owner", "operator", "ops"}:
             return True
@@ -326,12 +497,19 @@ def _is_admin_token(authz: str) -> bool:
         bag = {*(scopes or []), *(perms or [])}
         if any(s in bag for s in {"admin", "push:admin", "push:send", "ops:admin"}):
             return True
-        # Allowlist via env for phone/sub
+        # Allowlist via env for phone/sub (dev push)
         allowed_phones = {s.strip() for s in os.getenv("PUSH_DEV_ALLOWED_PHONES", "").split(",") if s.strip()}
         allowed_subs = {s.strip() for s in os.getenv("PUSH_DEV_ALLOWED_SUBS", "").split(",") if s.strip()}
         if allowed_phones and str(p.get("phone", "")) in allowed_phones:
             return True
         if allowed_subs and str(p.get("sub", "")) in allowed_subs:
+            return True
+        # Allowlist for topics (optional)
+        topics_phones = {s.strip() for s in os.getenv("PUSH_TOPICS_ALLOWED_PHONES", "").split(",") if s.strip()}
+        topics_subs = {s.strip() for s in os.getenv("PUSH_TOPICS_ALLOWED_SUBS", "").split(",") if s.strip()}
+        if topics_phones and str(p.get("phone", "")) in topics_phones:
+            return True
+        if topics_subs and str(p.get("sub", "")) in topics_subs:
             return True
     except Exception:
         return False
@@ -341,8 +519,8 @@ def _is_admin_token(authz: str) -> bool:
 def _require_push_dev_access(authorization: str | None):
     if authorization is None or not authorization.strip():
         raise HTTPException(status_code=401, detail="missing bearer token")
-    # Default: require admin unless explicitly allowed via env
-    allow_non_prod = os.getenv("PUSH_DEV_ALLOW_ALL", "false").lower() == "true"
+    # Default in non‑prod: allow all unless explicitly disabled
+    allow_non_prod = os.getenv("PUSH_DEV_ALLOW_ALL", "true").lower() == "true"
     if APP_ENV != "prod" and allow_non_prod:
         return
     if not _is_admin_token(authorization):
@@ -472,6 +650,9 @@ async def topic_subscribe(request: Request, authorization: str | None = Header(d
     headers = _auth_headers(authorization)
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
+    # Optional gating: require admin/allowlist when PUSH_TOPICS_ALLOW_ALL=false
+    if os.getenv("PUSH_TOPICS_ALLOW_ALL", "true").lower() != "true":
+        _require_push_dev_access(headers.get("Authorization"))
     sub = _decode_sub_from_bearer(headers.get("Authorization", "")) or "anon"
     try:
         payload = await request.json()
@@ -497,6 +678,8 @@ async def topic_unsubscribe(request: Request, authorization: str | None = Header
     headers = _auth_headers(authorization)
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
+    if os.getenv("PUSH_TOPICS_ALLOW_ALL", "true").lower() != "true":
+        _require_push_dev_access(headers.get("Authorization"))
     sub = _decode_sub_from_bearer(headers.get("Authorization", "")) or "anon"
     try:
         payload = await request.json()
@@ -627,8 +810,18 @@ def features(request: Request) -> Response:
     return Response(content=pyjson.dumps(payload), media_type="application/json", headers=headers)
 
 
-async def _fetch_json(client: httpx.AsyncClient, method: str, url: str, headers: Dict[str, str] | None = None, json: Any | None = None) -> Any:
-    r = await client.request(method, url, headers=headers, json=json, timeout=5.0)
+async def _fetch_json(client: httpx.AsyncClient, method: str, url: str, headers: Dict[str, str] | None = None, json: Any | None = None, request: Request | None = None) -> Any:
+    # Attach request id + traceparent when missing
+    headers = dict(headers or {})
+    try:
+        rid = getattr(request.state, "request_id", None) if request else None
+        if rid and "x-request-id" not in {k.lower(): v for k, v in headers.items()}:
+            headers["X-Request-ID"] = rid
+    except Exception:
+        pass
+    if "traceparent" not in {k.lower(): v for k, v in headers.items()}:
+        headers["traceparent"] = _gen_traceparent()
+    r = await _request_with_retries(client, method, url, headers=headers, json=json, timeout=5.0)
     if r.status_code >= 400:
         try:
             detail = r.json()
@@ -638,6 +831,33 @@ async def _fetch_json(client: httpx.AsyncClient, method: str, url: str, headers:
     if not r.content:
         return {}
     return r.json()
+
+
+async def _request_with_retries(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    headers: Dict[str, str] | None = None,
+    json: Any | None = None,
+    content: bytes | bytearray | memoryview | None = None,
+    timeout: float = 5.0,
+    attempts: int = 3,
+    base_sleep: float = 0.1,
+) -> httpx.Response:
+    last_exc: Optional[Exception] = None
+    for i in range(attempts):
+        try:
+            return await client.request(method, url, headers=headers, json=json, content=content, timeout=timeout)
+        except httpx.RequestError as e:
+            last_exc = e
+            if i == attempts - 1:
+                break
+            # exponential backoff with jitter
+            sleep = base_sleep * (2 ** i) + random.uniform(0, base_sleep)
+            await asyncio.sleep(sleep)
+    assert last_exc is not None
+    raise last_exc
 
 
 def _auth_headers(authz: str | None) -> Dict[str, str]:
@@ -650,12 +870,34 @@ def _auth_headers(authz: str | None) -> Dict[str, str]:
 _ME_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
 
 
+def _gen_request_id() -> str:
+    import uuid
+    return uuid.uuid4().hex
+
+
+def _gen_traceparent() -> str:
+    # Minimal W3C traceparent: 00-<32hex trace>-<16hex span>-01
+    trace_id = f"{random.getrandbits(128):032x}"
+    span_id = f"{random.getrandbits(64):016x}"
+    return f"00-{trace_id}-{span_id}-01"
+
+
+def _metrics_path_label(request: Request) -> str:
+    try:
+        route = getattr(request.scope.get("route"), "path", None)
+        if route:
+            if route == "/{service}/{full_path:path}":
+                return "/{service}/:proxy"
+            return route
+    except Exception:
+        pass
+    return request.url.path
+
+
 def _decode_sub_from_bearer(authz: str) -> Optional[str]:
     try:
-        raw = authz.split()[1]
-        parts = raw.split(".")
-        payload = pyjson.loads(base64.urlsafe_b64decode(parts[1] + "==").decode("utf-8"))
-        sub = str(payload.get("sub", ""))
+        p = _verify_bearer_payload(authz) or {}
+        sub = str(p.get("sub", ""))
         return sub or None
     except Exception:
         return None
@@ -667,6 +909,7 @@ async def me(request: Request, authorization: str | None = Header(default=None))
     headers = _auth_headers(authorization)
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
+    _ensure_valid_bearer(headers.get("Authorization", ""))
 
     # Cache key per user
     sub = _decode_sub_from_bearer(headers.get("Authorization", "")) or "anon"
@@ -676,31 +919,31 @@ async def me(request: Request, authorization: str | None = Header(default=None))
         return Response(content=pyjson.dumps(cached[1]), media_type="application/json", headers={"Cache-Control": "private, max-age=2"})
 
     async with httpx.AsyncClient() as client:
-        wallet = await _fetch_json(client, "GET", f"{PAYMENTS_BASE_URL}/wallet", headers=headers)
+        wallet = await _fetch_json(client, "GET", f"{PAYMENTS_BASE_URL}/wallet", headers=headers, request=request)
         # Optional tail of recent transactions (best‑effort)
         tx: List[Any] = []
         try:
-            txjs = await _fetch_json(client, "GET", f"{PAYMENTS_BASE_URL}/wallet/transactions", headers=headers)
+            txjs = await _fetch_json(client, "GET", f"{PAYMENTS_BASE_URL}/wallet/transactions", headers=headers, request=request)
             tx = txjs.get("transactions", [])[:5]
         except HTTPException:
             pass
         # KYC status
         kyc: Dict[str, Any] = {}
         try:
-            kyc = await _fetch_json(client, "GET", f"{PAYMENTS_BASE_URL}/kyc", headers=headers)
+            kyc = await _fetch_json(client, "GET", f"{PAYMENTS_BASE_URL}/kyc", headers=headers, request=request)
         except HTTPException:
             pass
         # Merchant status
         merch: Dict[str, Any] = {}
         try:
-            merch = await _fetch_json(client, "GET", f"{PAYMENTS_BASE_URL}/payments/merchant/status", headers=headers)
+            merch = await _fetch_json(client, "GET", f"{PAYMENTS_BASE_URL}/payments/merchant/status", headers=headers, request=request)
         except HTTPException:
             pass
         # Chat summary
         chat_sum: Dict[str, Any] = {}
         try:
             chat_base = DEFAULT_BASES.get("chat")
-            chat_sum = await _fetch_json(client, "GET", f"{chat_base}/messages/conversations_summary", headers=headers)
+            chat_sum = await _fetch_json(client, "GET", f"{chat_base}/messages/conversations_summary", headers=headers, request=request)
         except Exception:
             pass
 
@@ -785,7 +1028,7 @@ async def commerce_shops(authorization: str | None = Header(default=None), reque
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
     async with httpx.AsyncClient() as client:
-        shops = await _fetch_json(client, "GET", f"{DEFAULT_BASES['commerce']}/shops", headers=headers)
+        shops = await _fetch_json(client, "GET", f"{DEFAULT_BASES['commerce']}/shops", headers=headers, request=request)
     raw = pyjson.dumps(shops, separators=(",", ":")).encode("utf-8")
     etag = _etag_for_bytes(raw)
     inm = request.headers.get("if-none-match") if request else None
@@ -801,7 +1044,7 @@ async def commerce_products(shop_id: str, authorization: str | None = Header(def
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
     async with httpx.AsyncClient() as client:
-        products = await _fetch_json(client, "GET", f"{DEFAULT_BASES['commerce']}/shops/{shop_id}/products", headers=headers)
+        products = await _fetch_json(client, "GET", f"{DEFAULT_BASES['commerce']}/shops/{shop_id}/products", headers=headers, request=request)
     raw = pyjson.dumps(products, separators=(",", ":")).encode("utf-8")
     etag = _etag_for_bytes(raw)
     inm = request.headers.get("if-none-match") if request else None
@@ -817,7 +1060,7 @@ async def commerce_orders(authorization: str | None = Header(default=None), requ
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
     async with httpx.AsyncClient() as client:
-        orders = await _fetch_json(client, "GET", f"{DEFAULT_BASES['commerce']}/orders", headers=headers)
+        orders = await _fetch_json(client, "GET", f"{DEFAULT_BASES['commerce']}/orders", headers=headers, request=request)
     raw = pyjson.dumps(orders, separators=(",", ":")).encode("utf-8")
     etag = _etag_for_bytes(raw)
     inm = request.headers.get("if-none-match") if request else None
@@ -833,7 +1076,7 @@ async def commerce_order(order_id: str, authorization: str | None = Header(defau
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
     async with httpx.AsyncClient() as client:
-        order = await _fetch_json(client, "GET", f"{DEFAULT_BASES['commerce']}/orders/{order_id}", headers=headers)
+        order = await _fetch_json(client, "GET", f"{DEFAULT_BASES['commerce']}/orders/{order_id}", headers=headers, request=request)
     raw = pyjson.dumps(order, separators=(",", ":")).encode("utf-8")
     etag = _etag_for_bytes(raw)
     inm = request.headers.get("if-none-match") if request else None
@@ -852,7 +1095,9 @@ async def stays_properties(city: str | None = None, type: str | None = None, q: 
     if type: qp["type"] = type
     if q: qp["q"] = q
     async with httpx.AsyncClient() as client:
-        r = await client.get(f"{DEFAULT_BASES['stays']}/properties", params=qp, timeout=5.0)
+        _h = {"X-Request-ID": getattr(request, 'state', object()).__dict__.get('request_id', _gen_request_id()) if request else _gen_request_id(),
+              "traceparent": _gen_traceparent()}
+        r = await client.get(f"{DEFAULT_BASES['stays']}/properties", params=qp, headers=_h, timeout=5.0)
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text)
     raw = r.content or b"[]"
@@ -867,7 +1112,9 @@ async def stays_properties(city: str | None = None, type: str | None = None, q: 
 @app.get("/v1/stays/properties/{prop_id}")
 async def stays_property(prop_id: str, request: Request = None) -> Response:
     async with httpx.AsyncClient() as client:
-        r = await client.get(f"{DEFAULT_BASES['stays']}/properties/{prop_id}", timeout=5.0)
+        _h = {"X-Request-ID": getattr(request, 'state', object()).__dict__.get('request_id', _gen_request_id()) if request else _gen_request_id(),
+              "traceparent": _gen_traceparent()}
+        r = await client.get(f"{DEFAULT_BASES['stays']}/properties/{prop_id}", headers=_h, timeout=5.0)
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text)
     raw = r.content or b"{}"
@@ -885,7 +1132,7 @@ async def stays_reservations(authorization: str | None = Header(default=None), r
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
     async with httpx.AsyncClient() as client:
-        res = await _fetch_json(client, "GET", f"{DEFAULT_BASES['stays']}/reservations", headers=headers)
+        res = await _fetch_json(client, "GET", f"{DEFAULT_BASES['stays']}/reservations", headers=headers, request=request)
     raw = pyjson.dumps(res, separators=(",", ":")).encode("utf-8")
     etag = _etag_for_bytes(raw)
     inm = request.headers.get("if-none-match") if request else None
@@ -901,7 +1148,12 @@ async def stays_reservation_cancel(reservation_id: str, authorization: str | Non
     if "Authorization" not in headers:
         raise HTTPException(status_code=401, detail="missing bearer token")
     async with httpx.AsyncClient() as client:
-        r = await client.post(f"{DEFAULT_BASES['stays']}/reservations/{reservation_id}/cancel", headers=headers, timeout=5.0)
+        _h = dict(headers)
+        if "x-request-id" not in {k.lower(): v for k, v in _h.items()}:
+            _h["X-Request-ID"] = _gen_request_id()
+        if "traceparent" not in {k.lower(): v for k, v in _h.items()}:
+            _h["traceparent"] = _gen_traceparent()
+        r = await client.post(f"{DEFAULT_BASES['stays']}/reservations/{reservation_id}/cancel", headers=_h, timeout=5.0)
     if r.status_code >= 400:
         try:
             return Response(status_code=r.status_code, content=r.content or r.text, media_type=r.headers.get('content-type','application/json'))
@@ -917,7 +1169,7 @@ async def stays_favorites(authorization: str | None = Header(default=None), requ
         raise HTTPException(status_code=401, detail="missing bearer token")
     async with httpx.AsyncClient() as client:
         try:
-            fav = await _fetch_json(client, "GET", f"{DEFAULT_BASES['stays']}/properties/favorites", headers=headers)
+            fav = await _fetch_json(client, "GET", f"{DEFAULT_BASES['stays']}/properties/favorites", headers=headers, request=request)
         except HTTPException as e:
             # In dev, degrade to empty list to not block basic flows
             if APP_ENV != "prod":
@@ -1000,18 +1252,32 @@ async def proxy_service(service: str, full_path: str, request: Request) -> Any:
     if qs:
         url = f"{url}?{qs}"
 
-    # Forward selected headers (auth, content-type, idempotency, custom x-*)
+    # Forward selected headers (auth, content-type, idempotency, custom x-*, request-id/trace)
     fwd_headers: Dict[str, str] = {}
     for k, v in request.headers.items():
         lk = k.lower()
         if lk in ("authorization", "content-type", "accept", "idempotency-key") or lk.startswith("x-"):
             fwd_headers[k] = v
+    # Ensure a request id exists
+    if "x-request-id" not in {k.lower(): v for k, v in fwd_headers.items()}:
+        rid = getattr(request.state, "request_id", None) or _gen_request_id()
+        fwd_headers["X-Request-ID"] = rid
+    # Traceparent
+    if "traceparent" not in {k.lower(): v for k, v in fwd_headers.items()}:
+        fwd_headers["traceparent"] = _gen_traceparent()
+    # X-Forwarded-For best-effort
+    try:
+        ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "").split(",")[0].strip()
+        if ip:
+            fwd_headers.setdefault("X-Forwarded-For", ip)
+    except Exception:
+        pass
 
     body = await request.body()
     method = request.method.upper()
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.request(method, url, headers=fwd_headers, content=body, timeout=10.0)
+            resp = await _request_with_retries(client, method, url, headers=fwd_headers, content=body, timeout=10.0)
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=str(e))
 
